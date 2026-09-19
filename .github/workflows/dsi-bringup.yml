@@ -43,7 +43,7 @@ jobs:
             -v "$PWD:/repo" \
             -w /repo/src/dsi \
             skylyrac/blocksds:slim-latest \
-            bash -lc "make V=1"
+            bash -lc "make VERBOSE=1"
 
       - name: Upload DsiBringup.nds
         uses: actions/upload-artifact@v4
