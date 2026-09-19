@@ -81,10 +81,16 @@ SOURCES_CPP	:= $(shell find -L $(SOURCEDIRS) -name "*.cpp")
 #                            now DSi's too -- see docs/guides/filesystem.md in
 #                            the BlocksDS repo for why that POSIX surface is
 #                            expected to be there.
+#   RenderAPI_DSI.cpp    -- the DSi 3D-rendering backend, unused by the
+#                            bring-up smoke test itself (it never draws
+#                            anything through this API) but compiled here so
+#                            it is proven against the real toolchain, same
+#                            reasoning as DsiEarlyVideo.cpp.
 SOURCES_CPP	+= ../platform/Log.cpp \
 		   ../platform/storage/PathUtils.cpp \
 		   ../platform/storage/PosixFileSystem.cpp \
-		   ../platform/storage/StorageBackend_DSI.cpp
+		   ../platform/storage/StorageBackend_DSI.cpp \
+		   ../platform/RenderAPI_DSI.cpp
 
 DEFINES		+= -D__NDS__ -D__BLOCKSDS__ -DARM9
 
