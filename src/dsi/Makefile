@@ -67,13 +67,24 @@ endif
 SOURCES_S	:= $(shell find -L $(SOURCEDIRS) -name "*.s")
 SOURCES_C	:= $(shell find -L $(SOURCEDIRS) -name "*.c")
 SOURCES_CPP	:= $(shell find -L $(SOURCEDIRS) -name "*.cpp")
-# platform/Log.cpp is the shared logger DsiEarlyMemory.cpp/DsiEarlyVideo.cpp
-# call through (MC_LOG_INFO). Its own #if PLATFORM_WII branch is inert here
-# (DSI_PLATFORM is defined, not WII_PLATFORM), so it is safe to pull in on its
-# own without the rest of src/platform, which is NOT safe: most of it assumes
-# PC/PS2/Wii headers (SDL2, glad, gccore.h, ...) this Makefile does not provide.
-# The literal ".." in this path is intentional -- see BUILDDIR note below.
-SOURCES_CPP	+= ../platform/Log.cpp
+# These specific src/platform files are safe to pull in on their own, unlike
+# the rest of that directory: most of it assumes PC/PS2/Wii headers (SDL2,
+# glad, gccore.h, ...) this Makefile does not provide. Their own #if
+# PLATFORM_WII/PS2_PLATFORM branches are inert here (DSI_PLATFORM is defined,
+# not those). The literal ".." in each path is intentional -- see BUILDDIR
+# note below.
+#   Log.cpp              -- the shared logger DsiEarly*.cpp call through
+#                            (MC_LOG_INFO).
+#   storage/PathUtils.cpp -- plain string helpers (join/parent/...), no OS
+#                            calls, shared by every platform already.
+#   storage/PosixFileSystem.cpp -- generic fopen/stat/opendir-based file I/O,
+#                            now DSi's too -- see docs/guides/filesystem.md in
+#                            the BlocksDS repo for why that POSIX surface is
+#                            expected to be there.
+SOURCES_CPP	+= ../platform/Log.cpp \
+		   ../platform/storage/PathUtils.cpp \
+		   ../platform/storage/PosixFileSystem.cpp \
+		   ../platform/storage/StorageBackend_DSI.cpp
 
 DEFINES		+= -D__NDS__ -D__BLOCKSDS__ -DARM9
 

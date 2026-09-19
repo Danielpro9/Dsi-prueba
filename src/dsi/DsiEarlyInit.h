@@ -18,4 +18,15 @@ u32 dsiGetHeapCeiling();
 // Bytes currently committed to the malloc heap (getHeapEnd() - getHeapStart()).
 u32 dsiGetHeapCommitted();
 
+// Mounts the DSi's SD card and creates the save directory, at most once. Safe
+// and cheap to call again; the first call does the work. Returns whether the
+// card mounted and the save directory exists.
+bool dsiEnsureStorage();
+
+// Where world saves (and therefore streamed-out chunk region files -- see
+// DsiWorldTuning.h) live: "sd:/OptiCraft". Always returns a usable path, even
+// when nothing mounted, so callers get a path that fails to open rather than a
+// null pointer to check. Calls dsiEnsureStorage() for you.
+const char* dsiGetSaveDir();
+
 #endif // DSI_PLATFORM
