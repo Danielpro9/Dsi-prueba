@@ -6,6 +6,13 @@
 #if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
 #include "pc/lwjgl/Mouse.h"
 #include "pc/lwjgl/Display.h"
+#elif defined(DSI_PLATFORM)
+// No lwjgl::Mouse/Display compat layer exists for DSi yet -- input is
+// deferred (see the DSi input backend, not yet written) -- so nothing here
+// needs it. system_counter.h is BlocksDS's hardware-timer-backed tick
+// counter; see getMonotonicMicros() below for why that matters over
+// std::chrono on a toolchain this new.
+#include <nds/system_counter.h>
 #else
 #include <SDL.h>
 #endif
@@ -34,6 +41,10 @@ inline uint32_t getTicks()
 #elif defined(PS2_PLATFORM)
     using namespace std::chrono;
     return static_cast<uint32_t>(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+#elif defined(DSI_PLATFORM)
+    // See getMonotonicMicros() below for why this reads the hardware tick
+    // counter rather than std::chrono on this toolchain.
+    return systemCounterTicksToMsec(static_cast<u32>(systemCounterGetTicks()));
 #else
     return SDL_GetTicks();
 #endif
@@ -63,6 +74,13 @@ inline uint64_t getMonotonicMicros()
     return static_cast<uint64_t>(ticks_to_microsecs(gettime()));
 #elif defined(PS2_PLATFORM)
     return static_cast<uint64_t>(ps2_ee_micros());
+#elif defined(DSI_PLATFORM)
+    // systemCounterTicksToUsec() only takes a u32, which would wrap this
+    // every ~2 hours of uptime; doing the same conversion
+    // (nds/system_counter.h's own formula) on the full 64-bit tick count
+    // instead avoids that for a value this function promises is monotonic
+    // for as long as the game runs.
+    return (systemCounterGetTicks() * 1000000ULL) / (BUS_CLOCK / 64);
 #else
     using namespace std::chrono;
     return static_cast<uint64_t>(duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
@@ -78,6 +96,12 @@ inline void delay(uint32_t ms)
 #elif defined(PS2_PLATFORM)
     // The PS2 main loop is already synced by the GS flip. Do not busy-wait here.
     (void)ms;
+#elif defined(DSI_PLATFORM)
+    // No frame-pacing design exists yet for DSi (see the not-yet-written
+    // Display/main bootstrap) to say whether the main loop is already
+    // synced by something else the way PS2's is; a busy/blocking wait here
+    // would just be guessed at, so this stays a no-op until that exists.
+    (void)ms;
 #else
     SDL_Delay(ms);
 #endif
@@ -85,7 +109,7 @@ inline void delay(uint32_t ms)
 
 inline void setSmoothInputThreadPriority(bool enabled)
 {
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
     // C6's Smooth Input is a JVM main-thread priority tweak. The console ports
     // have different scheduler/audio/input constraints, so changing their main
     // thread priority here would be a new platform policy rather than a faithful
@@ -112,6 +136,12 @@ inline void getMouseState(int *x, int *y)
     // top-left origin, and shared GUI code expects that here.
     if (x) *x = lwjgl::Mouse::getX();
     if (y) *y = lwjgl::Display::getHeight() - lwjgl::Mouse::getY() - 1;
+#elif defined(DSI_PLATFORM)
+    // No pointer input wired up yet (touch screen, deferred with the rest of
+    // DSi input); reports "top-left, no motion" rather than uninitialised
+    // memory.
+    if (x) *x = 0;
+    if (y) *y = 0;
 #else
     SDL_GetMouseState(x, y);
 #endif

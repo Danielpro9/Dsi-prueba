@@ -81,16 +81,25 @@ SOURCES_CPP	:= $(shell find -L $(SOURCEDIRS) -name "*.cpp")
 #                            now DSi's too -- see docs/guides/filesystem.md in
 #                            the BlocksDS repo for why that POSIX surface is
 #                            expected to be there.
-#   RenderAPI_DSI.cpp    -- the DSi 3D-rendering backend, unused by the
-#                            bring-up smoke test itself (it never draws
-#                            anything through this API) but compiled here so
-#                            it is proven against the real toolchain, same
-#                            reasoning as DsiEarlyVideo.cpp.
+#   RenderAPI_DSI.cpp, Diagnostics_DSI.cpp, Resources_DSI.cpp,
+#   TextureResidencyPolicy_DSI.cpp, PlatformUserSettings_DSI.cpp,
+#   ScreenshotBackend_DSI.cpp, Profiler_DSI.cpp, ClientProfilerBackend_DSI.cpp
+#                        -- small platform backends, unused by the bring-up
+#                           smoke test itself but compiled here so they are
+#                           proven against the real toolchain, same reasoning
+#                           as DsiEarlyVideo.cpp.
 SOURCES_CPP	+= ../platform/Log.cpp \
 		   ../platform/storage/PathUtils.cpp \
 		   ../platform/storage/PosixFileSystem.cpp \
 		   ../platform/storage/StorageBackend_DSI.cpp \
-		   ../platform/RenderAPI_DSI.cpp
+		   ../platform/RenderAPI_DSI.cpp \
+		   ../platform/Diagnostics_DSI.cpp \
+		   ../platform/Resources_DSI.cpp \
+		   ../platform/TextureResidencyPolicy_DSI.cpp \
+		   ../platform/PlatformUserSettings_DSI.cpp \
+		   ../platform/ScreenshotBackend_DSI.cpp \
+		   ../platform/Profiler_DSI.cpp \
+		   ../platform/ClientProfilerBackend_DSI.cpp
 
 DEFINES		+= -D__NDS__ -D__BLOCKSDS__ -DARM9
 

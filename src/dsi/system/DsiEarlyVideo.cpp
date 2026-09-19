@@ -22,6 +22,13 @@ void dsiEnsureEarlyVideo()
 		return;
 	g_videoReady = true;
 
+	// Not video-related, but this is the one function every DSi entry point
+	// calls first (see DsiBringup.cpp), so it is the natural place for other
+	// one-time hardware setup that has to happen before anything measures
+	// time. platform/PlatformCompat.h's DSi getMonotonicMicros()/getTicks()
+	// read this counter and silently return garbage before it is set up.
+	systemCounterSetup();
+
 	powerOn(POWER_ALL);
 
 	videoSetMode(MODE_0_3D);
