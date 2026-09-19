@@ -211,6 +211,143 @@ void runCubeDemo()
 	}
 }
 
+// One textured vertex: position + UV, no per-vertex colour (drawn white so
+// the texture shows its real colours -- see runTerrainDemo()). Same
+// no-padding reasoning as CubeVertex: 3 floats + 2 floats is a clean 20-byte
+// stride.
+struct TexVertex
+{
+	float x, y, z;
+	float u, v;
+};
+
+// A flat 16x16 checkerboard, 4x4-pixel tiles, greenish/brownish -- there is no
+// real Minecraft texture asset pipeline for DSi yet (see Resources_DSI.cpp:
+// it looks for files under sd:/OptiCraft/data/assets, which this bring-up
+// build never stages), so this is generated in code purely to have *some*
+// non-solid-colour image to push through renderTextureImageRgba(). The cube
+// demo above never called that function at all: it only ever set per-vertex
+// colour, so the RGBA8->DS-native texture conversion in RenderAPI_DSI.cpp
+// (and the wrap/tiling texture parameters) are otherwise completely untested
+// until this runs.
+void buildCheckerTexture(std::uint8_t* rgba)
+{
+	constexpr int kSize = 16;
+	constexpr int kTile = 4;
+	for (int y = 0; y < kSize; ++y)
+	{
+		for (int x = 0; x < kSize; ++x)
+		{
+			const bool green = ((x / kTile) + (y / kTile)) % 2 == 0;
+			std::uint8_t* pixel = rgba + (std::size_t)(y * kSize + x) * 4;
+			pixel[0] = green ? 60  : 120; // R
+			pixel[1] = green ? 140 : 85;  // G
+			pixel[2] = green ? 60  : 45;  // B
+			pixel[3] = 255;
+		}
+	}
+}
+
+// A patch of "terrain": one large tiled floor quad plus three textured cubes
+// standing on it at different positions, all sharing the single checker
+// texture above -- as close as this bring-up tool gets to what
+// Tessellator/RenderGlobal will actually ask RenderAPI_DSI.cpp to do (many
+// textured quads, some depth-sorted against each other) without pulling in
+// any real Minecraft world/chunk code. Camera is tilted down onto the floor
+// with a plain X-axis renderRotate(), still ortho for the reasons in
+// runCubeDemo()'s comment.
+void runTerrainDemo()
+{
+	dsiEnsureEarlyVideo();
+
+	std::uint8_t texturePixels[16 * 16 * 4];
+	buildCheckerTexture(texturePixels);
+
+	int texture = 0;
+	renderGenerateTextures(1, &texture);
+	renderTextureBeginUpload(texture, 16, 16, 0, /*blur=*/false, /*clamp=*/false);
+	renderTextureImageRgba(0, 16, 16, texturePixels);
+
+	// The floor: one quad from (-2,-0.5,-2) to (2,-0.5,2), UVs 0..4 so
+	// GL_TEXTURE_WRAP_S/T (set by renderTextureBeginUpload's clamp=false
+	// above) tiles the 16x16 checker 4x4 times across it.
+	const TexVertex floorVertices[4] = {
+		{-2.0f, -0.5f, -2.0f, 0.0f, 0.0f},
+		{ 2.0f, -0.5f, -2.0f, 4.0f, 0.0f},
+		{ 2.0f, -0.5f,  2.0f, 4.0f, 4.0f},
+		{-2.0f, -0.5f,  2.0f, 0.0f, 4.0f},
+	};
+
+	// One textured unit cube (all six faces reuse the same 0..1 UV square;
+	// there is no atlas to pick a different sub-rectangle per face yet).
+	const TexVertex cubeVertices[24] = {
+		{-0.5f, -0.5f,  0.5f, 0, 0}, { 0.5f, -0.5f,  0.5f, 1, 0}, { 0.5f,  0.5f,  0.5f, 1, 1}, {-0.5f,  0.5f,  0.5f, 0, 1},
+		{ 0.5f, -0.5f, -0.5f, 0, 0}, {-0.5f, -0.5f, -0.5f, 1, 0}, {-0.5f,  0.5f, -0.5f, 1, 1}, { 0.5f,  0.5f, -0.5f, 0, 1},
+		{ 0.5f, -0.5f,  0.5f, 0, 0}, { 0.5f, -0.5f, -0.5f, 1, 0}, { 0.5f,  0.5f, -0.5f, 1, 1}, { 0.5f,  0.5f,  0.5f, 0, 1},
+		{-0.5f, -0.5f, -0.5f, 0, 0}, {-0.5f, -0.5f,  0.5f, 1, 0}, {-0.5f,  0.5f,  0.5f, 1, 1}, {-0.5f,  0.5f, -0.5f, 0, 1},
+		{-0.5f,  0.5f,  0.5f, 0, 0}, { 0.5f,  0.5f,  0.5f, 1, 0}, { 0.5f,  0.5f, -0.5f, 1, 1}, {-0.5f,  0.5f, -0.5f, 0, 1},
+		{-0.5f, -0.5f, -0.5f, 0, 0}, { 0.5f, -0.5f, -0.5f, 1, 0}, { 0.5f, -0.5f,  0.5f, 1, 1}, {-0.5f, -0.5f,  0.5f, 0, 1},
+	};
+	// Three "blocks" at different floor positions, so overlapping/occluding
+	// geometry actually gets depth-tested against both the floor and each
+	// other, not just against itself like the single cube demo.
+	const float cubePositions[3][3] = {
+		{-1.0f, 0.0f, -0.5f},
+		{ 0.3f, 0.0f,  0.5f},
+		{ 1.2f, 0.5f, -1.0f}, // taller stack: y=0.5 sits one cube-height above the first two
+	};
+
+	RenderInterleavedMesh floorMesh;
+	floorMesh.data = floorVertices;
+	floorMesh.stride = sizeof(TexVertex);
+	floorMesh.count = 4;
+	floorMesh.primitive = RenderPrimitive::Quads;
+	floorMesh.hasTexture = true;
+	floorMesh.texCoordOffset = offsetof(TexVertex, u);
+
+	RenderInterleavedMesh cubeMesh;
+	cubeMesh.data = cubeVertices;
+	cubeMesh.stride = sizeof(TexVertex);
+	cubeMesh.count = 24;
+	cubeMesh.primitive = RenderPrimitive::Quads;
+	cubeMesh.hasTexture = true;
+	cubeMesh.texCoordOffset = offsetof(TexVertex, u);
+
+	renderMatrixMode(RenderMatrixMode::Projection);
+	renderLoadIdentity();
+	renderOrtho(-3.0, 3.0, -2.25, 2.25, 0.1, 20.0);
+	renderEnable(RenderCapability::DepthTest);
+	renderEnable(RenderCapability::Texture2D);
+	renderBindTexture(texture);
+	renderColor3f(1.0f, 1.0f, 1.0f); // white: let the texture show its own colour
+
+	int angle = 0;
+	while (true)
+	{
+		renderMatrixMode(RenderMatrixMode::ModelView);
+		renderLoadIdentity();
+		renderTranslate(0.0f, 0.0f, -4.0f);
+		renderRotate(35.0f, 1.0f, 0.0f, 0.0f); // tilt down onto the floor
+		renderRotate((float)angle, 0.0f, 1.0f, 0.0f); // slow orbit around it
+		angle = (angle + 1) % 360;
+
+		renderDrawInterleaved(floorMesh);
+		for (const float (&pos)[3] : cubePositions)
+		{
+			renderPushMatrix();
+			renderTranslate(pos[0], pos[1], pos[2]);
+			renderDrawInterleaved(cubeMesh);
+			renderPopMatrix();
+		}
+
+		glFlush(0); // waits for vblank and swaps
+
+		scanKeys();
+		if (keysDown() & KEY_START)
+			break;
+	}
+}
+
 void reportStorage()
 {
 	if (!fatInitDefault())
@@ -260,9 +397,10 @@ int main(int argc, char** argv)
 
 	std::printf("\nA: top=3D/bottom=black colour-cycle demo\n");
 	std::printf("X: spinning cube via RenderAPI_DSI (the real renderer)\n");
+	std::printf("Y: textured floor + blocks (tests texture upload, untested by X)\n");
 	std::printf("START: exit\n");
 
-	int choice = 0; // 0 = exit, 1 = colour cycle, 2 = cube
+	int choice = 0; // 0 = exit, 1 = colour cycle, 2 = cube, 3 = textured terrain
 	while (true)
 	{
 		swiWaitForVBlank();
@@ -280,12 +418,19 @@ int main(int argc, char** argv)
 			choice = 2;
 			break;
 		}
+		if (down & KEY_Y)
+		{
+			choice = 3;
+			break;
+		}
 	}
 
 	if (choice == 1)
 		runVideoDemo(); // returns on START
 	else if (choice == 2)
 		runCubeDemo(); // returns on START
+	else if (choice == 3)
+		runTerrainDemo(); // returns on START
 
 	return 0;
 }
