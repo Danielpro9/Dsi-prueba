@@ -53,8 +53,8 @@ void reportDsiMode()
 // 16 MB the console actually has -- that's the point of printing it here.
 void reportMemory()
 {
-	const u32 ceilingKb = dsiGetHeapCeiling() / 1024u;
-	const u32 committedKb = dsiGetHeapCommitted() / 1024u;
+	const unsigned ceilingKb = (unsigned)(dsiGetHeapCeiling() / 1024u);
+	const unsigned committedKb = (unsigned)(dsiGetHeapCommitted() / 1024u);
 	std::printf("HEAP    %u KB ceiling (enforced), %u KB committed\n", ceilingKb, committedKb);
 	std::printf("BUDGET  8192 KB target; PS2 used ~14336 of 32768\n");
 }

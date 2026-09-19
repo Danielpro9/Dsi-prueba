@@ -58,7 +58,7 @@ void captureInitialState()
 
 	MC_LOG_INFO("dsi", "dsi mode (TWL): %s\n", isDSiMode() ? "yes" : "no");
 	MC_LOG_INFO("dsi", "heap ceiling %u KB (budget %u KB)\n",
-	       g_heapCeiling / 1024u, DSI_HEAP_BUDGET_TARGET_KB);
+	       (unsigned)(g_heapCeiling / 1024u), (unsigned)DSI_HEAP_BUDGET_TARGET_KB);
 }
 
 } // namespace DsiEarlyMemory
