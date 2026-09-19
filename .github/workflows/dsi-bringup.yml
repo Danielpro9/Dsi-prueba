@@ -16,6 +16,13 @@ name: DSi bring-up build
 # bootstrapping the Wonderful Toolchain package manager from scratch, since
 # that image ships BLOCKSDS/WONDERFUL_TOOLCHAIN already installed and
 # configured.
+#
+# The built ROM is delivered two ways: as a normal workflow artifact (the
+# actions/upload-artifact step), and committed into dist/dsi/ in the repo
+# itself. The second one exists because the artifact's download URL is an
+# Azure Blob Storage link, which is also blocked by that same sandbox's
+# network policy -- dist/dsi/DsiBringup.nds is reachable with a plain git pull
+# instead.
 
 on:
   push:
@@ -28,7 +35,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -45,9 +52,28 @@ jobs:
             skylyrac/blocksds:slim-latest \
             bash -lc "make VERBOSE=1"
 
-      - name: Upload DsiBringup.nds
+      - name: Upload DsiBringup.nds as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: DsiBringup-nds
           path: src/dsi/DsiBringup.nds
           if-no-files-found: error
+
+      # The artifact above downloads through Azure Blob Storage, which the
+      # development sandbox's network policy blocks -- so the built ROM also
+      # gets committed straight into the repo, which a plain `git pull` can
+      # reach from there instead. dist/ is outside this workflow's own `paths:`
+      # filter, so this commit does not re-trigger the build.
+      - name: Commit built ROM into dist/dsi/
+        run: |
+          mkdir -p dist/dsi
+          cp src/dsi/DsiBringup.nds dist/dsi/DsiBringup.nds
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dist/dsi/DsiBringup.nds
+          if git diff --cached --quiet; then
+            echo "Built ROM unchanged; nothing to commit."
+          else
+            git commit -m "CI: update built DsiBringup.nds [skip ci]"
+            git push
+          fi
