@@ -25,11 +25,13 @@
 
 #include <nds.h>
 #include <fat.h>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
 
 #include "dsi/DsiEarlyInit.h"
+#include "platform/RenderAPI.h"
 
 namespace
 {
@@ -131,6 +133,84 @@ void runVideoDemo()
 	}
 }
 
+// One RGBA8-coloured vertex, laid out exactly how RenderInterleavedMesh
+// expects (position first, then whatever optional attributes are flagged --
+// see RenderAPI.h). No padding: 3 floats (12 bytes) + 4 bytes is already a
+// multiple of 4, so sizeof(CubeVertex) == stride with no gaps to account for.
+struct CubeVertex
+{
+	float x, y, z;
+	std::uint8_t r, g, b, a;
+};
+
+// A unit cube, one solid colour per face, so a wrongly-transformed or
+// wrongly-wound face is immediately obvious as "wrong colour where I didn't
+// expect it" rather than needing a texture to notice anything is off.
+const CubeVertex kCubeVertices[24] = {
+	// Front (+Z) red
+	{-0.5f, -0.5f,  0.5f, 255, 0, 0, 255}, { 0.5f, -0.5f,  0.5f, 255, 0, 0, 255},
+	{ 0.5f,  0.5f,  0.5f, 255, 0, 0, 255}, {-0.5f,  0.5f,  0.5f, 255, 0, 0, 255},
+	// Back (-Z) green
+	{ 0.5f, -0.5f, -0.5f, 0, 255, 0, 255}, {-0.5f, -0.5f, -0.5f, 0, 255, 0, 255},
+	{-0.5f,  0.5f, -0.5f, 0, 255, 0, 255}, { 0.5f,  0.5f, -0.5f, 0, 255, 0, 255},
+	// Right (+X) blue
+	{ 0.5f, -0.5f,  0.5f, 0, 0, 255, 255}, { 0.5f, -0.5f, -0.5f, 0, 0, 255, 255},
+	{ 0.5f,  0.5f, -0.5f, 0, 0, 255, 255}, { 0.5f,  0.5f,  0.5f, 0, 0, 255, 255},
+	// Left (-X) yellow
+	{-0.5f, -0.5f, -0.5f, 255, 255, 0, 255}, {-0.5f, -0.5f,  0.5f, 255, 255, 0, 255},
+	{-0.5f,  0.5f,  0.5f, 255, 255, 0, 255}, {-0.5f,  0.5f, -0.5f, 255, 255, 0, 255},
+	// Top (+Y) magenta
+	{-0.5f,  0.5f,  0.5f, 255, 0, 255, 255}, { 0.5f,  0.5f,  0.5f, 255, 0, 255, 255},
+	{ 0.5f,  0.5f, -0.5f, 255, 0, 255, 255}, {-0.5f,  0.5f, -0.5f, 255, 0, 255, 255},
+	// Bottom (-Y) cyan
+	{-0.5f, -0.5f, -0.5f, 0, 255, 255, 255}, { 0.5f, -0.5f, -0.5f, 0, 255, 255, 255},
+	{ 0.5f, -0.5f,  0.5f, 0, 255, 255, 255}, {-0.5f, -0.5f,  0.5f, 0, 255, 255, 255},
+};
+
+// This is the actual point of this file existing: DsiEarlyVideo.cpp only
+// proves the video/GL setup itself; this proves platform/RenderAPI_DSI.cpp
+// -- the ~900-line GL-to-libnds translation layer the real Minecraft renderer
+// will call into -- actually turns a Minecraft-shaped RenderInterleavedMesh
+// into a correct, transformed, coloured shape on screen. Orthographic instead
+// of a real perspective frustum: it needs no FOV/aspect math this port has no
+// way to check yet (see the "APPROXIMATED"/"ASSUMED" notes in
+// RenderAPI_DSI.cpp), and a rotating cube still fully exercises the matrix
+// stack, per-vertex colour and depth test either way.
+void runCubeDemo()
+{
+	dsiEnsureEarlyVideo();
+
+	RenderInterleavedMesh mesh;
+	mesh.data = kCubeVertices;
+	mesh.stride = sizeof(CubeVertex);
+	mesh.count = 24;
+	mesh.primitive = RenderPrimitive::Quads;
+	mesh.hasColor = true;
+	mesh.colorOffset = offsetof(CubeVertex, r);
+
+	renderMatrixMode(RenderMatrixMode::Projection);
+	renderLoadIdentity();
+	renderOrtho(-2.0, 2.0, -1.5, 1.5, 0.1, 10.0);
+	renderEnable(RenderCapability::DepthTest);
+
+	int angle = 0;
+	while (true)
+	{
+		renderMatrixMode(RenderMatrixMode::ModelView);
+		renderLoadIdentity();
+		renderTranslate(0.0f, 0.0f, -3.0f);
+		renderRotate((float)angle, 0.4f, 1.0f, 0.2f);
+		angle = (angle + 2) % 360;
+
+		renderDrawInterleaved(mesh);
+		glFlush(0); // waits for vblank and swaps
+
+		scanKeys();
+		if (keysDown() & KEY_START)
+			break;
+	}
+}
+
 void reportStorage()
 {
 	if (!fatInitDefault())
@@ -178,9 +258,11 @@ int main(int argc, char** argv)
 	reportByteOrder();
 	reportStorage();
 
-	std::printf("\nA: show top=3D/bottom=black video demo\nSTART: exit\n");
+	std::printf("\nA: top=3D/bottom=black colour-cycle demo\n");
+	std::printf("X: spinning cube via RenderAPI_DSI (the real renderer)\n");
+	std::printf("START: exit\n");
 
-	bool showVideoDemo = false;
+	int choice = 0; // 0 = exit, 1 = colour cycle, 2 = cube
 	while (true)
 	{
 		swiWaitForVBlank();
@@ -190,13 +272,20 @@ int main(int argc, char** argv)
 			break;
 		if (down & KEY_A)
 		{
-			showVideoDemo = true;
+			choice = 1;
+			break;
+		}
+		if (down & KEY_X)
+		{
+			choice = 2;
 			break;
 		}
 	}
 
-	if (showVideoDemo)
+	if (choice == 1)
 		runVideoDemo(); // returns on START
+	else if (choice == 2)
+		runCubeDemo(); // returns on START
 
 	return 0;
 }
