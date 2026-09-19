@@ -7,8 +7,15 @@
 // -----------------------------------------------------------------------------
 // The game code should prefer these PLATFORM_* names for world/simulation/render
 // budgets.  PS2-specific files may still use PS2_* directly.
-
-#if PLATFORM_PS2
+//
+// DSi takes this branch too (not just PLATFORM_CONSOLE_LOW's world-generation
+// knobs): its ARM9 has no hardware FPU at all, the same shape of constraint
+// this whole table exists for, so it inherits the PS2 CPU-shortcut profile
+// wholesale rather than a hand-picked subset. platform/tuning/PlatformDsiTuning.h
+// (included after this file, from PlatformTuning.h) then overrides the handful
+// of chunk-cache/radius values DSi's much smaller RAM budget needs tighter than
+// PS2's -- see DsiWorldTuning.h for those and why they differ.
+#if PLATFORM_PS2 || PLATFORM_DSI
 #  define PLATFORM_DEFAULT_RENDER_DISTANCE              PS2_DEFAULT_RENDER_DISTANCE
 // ofMipmapLevel the performance profile starts from. See PS2_TERRAIN_MIPMAPS.
 #  define PLATFORM_DEFAULT_MIPMAP_LEVEL                 (PS2_TERRAIN_MIPMAPS ? PS2_TERRAIN_MIP_LEVELS : 0)

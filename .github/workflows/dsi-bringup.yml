@@ -1,0 +1,53 @@
+name: DSi bring-up build
+
+# Builds src/dsi/DsiBringup.nds with the real BlocksDS toolchain and uploads it
+# as a downloadable artifact.
+#
+# Why this exists: the sandbox this code was developed in has its outbound
+# network access restricted by an egress proxy that blocks the BlocksDS/
+# Wonderful Toolchain download servers (blocksds.skylyrac.net, codeberg.org,
+# wonderful.asie.pl), so nothing there could compile src/dsi/ end-to-end --
+# only syntax-check individual files against a generic arm-none-eabi-g++ (see
+# the DSi commit history for what that did and did not catch). GitHub-hosted
+# runners have no such restriction, so this workflow is the actual build.
+#
+# Uses the official prebuilt BlocksDS Docker image (skylyrac/blocksds:slim,
+# from docs/content/docs/setup/docker.md in the BlocksDS repo) rather than
+# bootstrapping the Wonderful Toolchain package manager from scratch, since
+# that image ships BLOCKSDS/WONDERFUL_TOOLCHAIN already installed and
+# configured.
+
+on:
+  push:
+    branches:
+      - claude/dsi-backend-memory-setup-nvtg0d
+    paths:
+      - 'src/dsi/**'
+      - 'src/platform/**'
+      - '.github/workflows/dsi-bringup.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build DsiBringup.nds inside the BlocksDS container
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -w /repo/src/dsi \
+            skylyrac/blocksds:slim-latest \
+            bash -lc "make V=1"
+
+      - name: Upload DsiBringup.nds
+        uses: actions/upload-artifact@v4
+        with:
+          name: DsiBringup-nds
+          path: src/dsi/DsiBringup.nds
+          if-no-files-found: error

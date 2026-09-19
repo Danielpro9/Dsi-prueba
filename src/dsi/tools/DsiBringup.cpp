@@ -7,9 +7,9 @@
 //   1. Whether the ROM is actually running DSi-enhanced (isDSiMode()) and, if
 //      so, the enforced malloc heap ceiling. Building against dsi_arm9.specs
 //      gets a retail DSi's real 16 MB of main RAM (confirmed against
-//      BlocksDS's own docs -- see DsiEarlyMemory.cpp), and
-//      DsiEarlyMemory.cpp caps it at the project brief's 8-9 MB budget with
-//      reduceHeapSize(), leaving the rest untouched as crash margin. This is
+//      BlocksDS's own docs -- see DsiEarlyMemory.cpp), and DsiEarlyMemory.cpp
+//      caps it at a 12 MB budget with reduceHeapSize(), leaving 4 MB as an
+//      unprofiled-code safety margin rather than half the console. This is
 //      the first place that confirms that actually happened on real
 //      hardware/an emulator instead of the game silently assuming it.
 //   2. Byte order and type sizes. The ARM9 is little-endian, like the PS2's EE
@@ -49,14 +49,14 @@ void reportDsiMode()
 }
 
 // dsiGetHeapCeiling() already applies DsiEarlyMemory's reduceHeapSize() cap, so
-// in DSi mode this should read ~8192 KB (the enforced budget), not the raw
+// in DSi mode this should read ~12288 KB (the enforced budget), not the raw
 // 16 MB the console actually has -- that's the point of printing it here.
 void reportMemory()
 {
 	const unsigned ceilingKb = (unsigned)(dsiGetHeapCeiling() / 1024u);
 	const unsigned committedKb = (unsigned)(dsiGetHeapCommitted() / 1024u);
 	std::printf("HEAP    %u KB ceiling (enforced), %u KB committed\n", ceilingKb, committedKb);
-	std::printf("BUDGET  8192 KB target; PS2 used ~14336 of 32768\n");
+	std::printf("BUDGET  12288 KB target (3/4 of 16 MB); PS2 used ~14336 of 32768\n");
 }
 
 void reportByteOrder()
@@ -81,6 +81,54 @@ void reportByteOrder()
 	            (unsigned)sizeof(float), (unsigned)sizeof(double),
 	            (unsigned)sizeof(long), (unsigned)sizeof(long long),
 	            (unsigned)sizeof(void*));
+}
+
+// Switches from the diagnostic text console into the actual layout the real
+// game will boot into (dsiEnsureEarlyVideo(): top screen MODE_0_3D, bottom
+// screen left blank so it reads flat black -- see DsiEarlyVideo.cpp) and keeps
+// it live so it can actually be looked at, instead of just trusting the
+// DsiEarlyVideo.cpp source. The clear color cycles through hue so a frozen/
+// black top screen (GL never initialized, wrong VRAM bank, ...) is
+// immediately obvious rather than looking identical to "it's just black on
+// purpose" -- which is deliberately what the BOTTOM screen looks like right
+// next to it, so the contrast is the point.
+//
+// Deliberately not a rotating 3D shape: that needs gluPerspectivef32/
+// gluLookAtf32 fixed-point parameters this port has no way to check against
+// real hardware yet (see the compile-only verification note in the DSi
+// storage/tuning commits), and a wrong FOV or camera would make a working GL
+// setup look broken. A clear-color cycle only exercises glClearColor()+
+// glFlush(), which is already proven by this file having reached this point
+// at all.
+// Triangle wave over a 62-frame period, clamped to glClearColor's 0-31 range:
+// 0 -> 31 over the first half, back down to 0 over the second. Three copies of
+// this, phase-shifted, stand in for a real HSV-to-RGB conversion -- all that
+// matters here is "visibly and continuously changing colour".
+int triangleWave31(int phase)
+{
+	phase = phase % 62;
+	return phase < 31 ? phase : 62 - phase;
+}
+
+void runVideoDemo()
+{
+	dsiEnsureEarlyVideo();
+
+	int hue = 0;
+	while (true)
+	{
+		glClearColor((uint8_t)triangleWave31(hue),
+		             (uint8_t)triangleWave31(hue + 20),
+		             (uint8_t)triangleWave31(hue + 40),
+		             31);
+		++hue;
+
+		glFlush(0); // waits for vblank and swaps, same as swiWaitForVBlank()
+
+		scanKeys();
+		if (keysDown() & KEY_START)
+			break;
+	}
 }
 
 void reportStorage()
@@ -130,15 +178,25 @@ int main(int argc, char** argv)
 	reportByteOrder();
 	reportStorage();
 
-	std::printf("\nSTART to exit.\n");
+	std::printf("\nA: show top=3D/bottom=black video demo\nSTART: exit\n");
 
+	bool showVideoDemo = false;
 	while (true)
 	{
 		swiWaitForVBlank();
 		scanKeys();
-		if (keysDown() & KEY_START)
+		const int down = keysDown();
+		if (down & KEY_START)
 			break;
+		if (down & KEY_A)
+		{
+			showVideoDemo = true;
+			break;
+		}
 	}
+
+	if (showVideoDemo)
+		runVideoDemo(); // returns on START
 
 	return 0;
 }

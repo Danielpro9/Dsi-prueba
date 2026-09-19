@@ -10,9 +10,10 @@ void dsiEnsureEarlyVideo();
 
 // Upper bound of the malloc heap right now, in bytes. Built against
 // dsi_arm9.specs (see src/dsi/Makefile) and launched DSi-enhanced, this is the
-// project brief's 8-9 MB budget, deliberately capped there by reduceHeapSize()
-// even though the DSi has 16 MB -- see DsiEarlyMemory.cpp. Built/launched as
-// plain NDS-compatible instead, it is the natural ~3.5-4 MB ceiling.
+// enforced 12 MB budget from DsiEarlyMemory.cpp (reduceHeapSize() caps it there
+// even though the DSi genuinely has 16 MB -- see that file for why it is 12 and
+// not the full 16). Built/launched as plain NDS-compatible instead, it is the
+// natural ~3.5-4 MB ceiling.
 u32 dsiGetHeapCeiling();
 
 // Bytes currently committed to the malloc heap (getHeapEnd() - getHeapStart()).

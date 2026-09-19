@@ -16,26 +16,26 @@
 //
 // The budget these numbers are sized against, and why they are tighter than PS2
 // ------------------------------------------------------------------------------
-// DsiEarlyMemory.cpp enforces an 8 MB heap ceiling total (code, textures, GL
+// DsiEarlyMemory.cpp enforces a 12 MB heap ceiling total (code, textures, GL
 // state, entities, the Java-side object heap -- everything, not just chunks).
 // PS2's own comment in ps2/tuning/Ps2CoreTuning.h records a MEASURED number for
 // its chunk cache: radius 2 with 3 vertical sections (25 columns x 3 = 75
-// renderer slots) cost ~8 MB BY ITSELF, out of a 32 MB total budget. That is
-// PS2's entire chunk allowance before touching anything else, and DSi's ENTIRE
-// budget is smaller than that one number. Copying PS2's radius as-is would
-// alone exceed what DSi has for the whole game.
+// renderer slots) cost ~8 MB BY ITSELF, out of a 32 MB total budget. Even
+// against DSi's larger 12 MB (raised from an initial 8, see DsiEarlyMemory.cpp)
+// that is most of the whole-game allowance for chunks alone, so this file still
+// does not copy PS2's radius as-is.
 //
-// So this file does not reuse PS2's radius/vertical-count values, only its
-// eviction-rate ones (which are already the tightest in the table and are not a
-// function of how much RAM the console has, just how much I/O stall per tick is
-// tolerable). The radius/vertical-count numbers below are a first estimate, NOT
-// a measurement: scaled from PS2's one real data point by slot count --
+// It reuses PS2's eviction-rate constants (which are already the tightest in
+// the table and are not a function of how much RAM the console has, just how
+// much I/O stall per tick is tolerable), but not its radius/vertical-count
+// values. The radius/vertical-count numbers below are a first estimate, NOT a
+// measurement: scaled from PS2's one real data point by slot count --
 // (1 chunk radius, 3x3=9 columns) x (2 vertical sections) = 18 slots, against
 // PS2's 75 -- i.e. roughly a quarter of PS2's ~8 MB, call it ~2 MB, leaving
-// headroom in the 8 MB budget for everything else. Treat every number here as
-// "unverified, needs a real run" until DsiBringup.cpp (or a chunk-loaded version
-// of it) has actually printed a measured heap number back. See the corresponding
-// comment in DsiEarlyMemory.cpp.
+// comfortable headroom in the 12 MB budget for everything else. That headroom
+// is exactly why radius 2 (PS2's own value) is the first thing worth trying
+// once there is a real measured run to check it against -- see the corresponding
+// comment in DsiEarlyMemory.cpp -- rather than guessing it up front.
 
 #if PLATFORM_DSI
 #define PLATFORM_BOUNDED_WORLD 1

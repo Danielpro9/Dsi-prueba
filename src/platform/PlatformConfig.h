@@ -228,8 +228,20 @@
 //
 // What the Wii DID need from the old combined profile is the memory half, which
 // is now PLATFORM_BOUNDED_WORLD below.
+//
+// The DSi is the opposite case from the Wii: its ARM9 (946E-S) has NO hardware
+// FPU at all -- src/dsi/Makefile builds with -mcpu=arm946e-s+nofp -- so every
+// float and double op is a software libgcc call, same shape of problem as the
+// PS2's EE (no double-precision hardware) and arguably worse (the EE at least
+// has single-precision hardware). PLATFORM_CONSOLE_LOW's arithmetic shortcuts
+// (float ore veins, heightmap terrain, MathHelper::floor_double from the IEEE
+// bit pattern, ...) exist for exactly this. Enabled 2026-09-19 at the user's
+// request; it changes generated-world determinism from the vanilla/PC path
+// (see PS2_INTEGER_FLOOR_DOUBLE etc. in ps2/tuning/Ps2CoreTuning.h for what it
+// actually touches), which is worth knowing before comparing a DSi world seed
+// against a PC one.
 #ifndef PLATFORM_CONSOLE_LOW
-#  if PLATFORM_PS2
+#  if PLATFORM_PS2 || PLATFORM_DSI
 #    define PLATFORM_CONSOLE_LOW 1
 #  else
 #    define PLATFORM_CONSOLE_LOW 0

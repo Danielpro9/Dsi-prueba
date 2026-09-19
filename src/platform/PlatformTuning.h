@@ -2,7 +2,12 @@
 
 #include "platform/PlatformConfig.h"
 
-#if PLATFORM_PS2
+// DSi shares this table too: PLATFORM_CONSOLE_LOW is on for it (see
+// PlatformConfig.h -- no hardware FPU), and PlatformGameTuning.h's "#if
+// PLATFORM_PS2" CPU-shortcut branch below covers both consoles for the same
+// reason. Ps2Tuning.h is pure #define tables (no PS2 hardware headers), so
+// pulling it into a DSi/ARM9 build is safe.
+#if PLATFORM_PS2 || PLATFORM_DSI
 #include "ps2/render/Ps2Tuning.h"
 #endif
 

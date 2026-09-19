@@ -13,29 +13,42 @@ u8* g_heapStart = nullptr;
 }
 
 // -----------------------------------------------------------------------------
-// The 8-9 MB budget, enforced
+// The budget, enforced
 // -----------------------------------------------------------------------------
 // Confirmed against BlocksDS's own docs (docs/internal/memory_map.md section 4,
-// docs/guides/usage_notes.md "ARM9 options"): a retail DSi's main RAM is 16 MB
-// once the ARM9 binary is built against dsi_arm9.specs (see src/dsi/Makefile)
-// and the ROM is actually launched DSi-enhanced -- no SCFG_EXT register poking
-// needed from game code, the crt0 that ships with that specs file does it.
-// isDSiMode() below confirms it actually happened at boot, since that also
-// depends on how the .nds is launched (DSi Menu / a loader that respects the
-// DSi-enhanced header), not just on how it was compiled.
+// docs/guides/usage_notes.md "ARM9 options"): a retail DSi's main RAM is a real,
+// usable 16 MB once the ARM9 binary is built against dsi_arm9.specs (see
+// src/dsi/Makefile) and the ROM is actually launched DSi-enhanced -- no
+// SCFG_EXT register poking needed from game code, the crt0 that ships with that
+// specs file does it. isDSiMode() below confirms it actually happened at boot,
+// since that also depends on how the .nds is launched (DSi Menu / a loader
+// that respects the DSi-enhanced header), not just on how it was compiled. So
+// the full 16 MB genuinely is available -- this is a deliberate choice to use
+// less of it, not a hardware/toolchain limit.
 //
-// The brief wants roughly HALF of that (8-9 MB) actually used, with the rest
-// held back as a crash margin -- mirroring the PS2 port using ~14 of its 32 MB.
-// reduceHeapSize() is libnds's tool for that: called here before anything has
-// allocated, it shrinks the malloc ceiling by a fixed number of bytes, so the
-// upper half of main RAM is never handed out no matter what the game does
-// later. This makes the budget an enforced ceiling instead of a number game
-// code has to remember to respect.
+// Raised from an initial 8 MB (half of 16, mirroring the PS2 port's ~14-of-32)
+// to 12 MB (three quarters) after discussion: a DSi-enhanced title fully owns
+// the console the way most PS2 games do too -- there is no background menu it
+// has to coexist with, a soft reset is the way out either way -- so there is
+// less reason to hold back half of it than the original PS2-ratio guess
+// assumed. The remaining 4 MB margin exists for a different reason than "share
+// it with something else": nothing in this port has been profiled on real
+// hardware yet, so it is a cushion against our own bugs (leaks, fragmentation,
+// an unexpectedly large allocation) rather than a design requirement. Once a
+// real run reports actual resident/committed numbers here, this is the
+// constant to move -- up toward ~15 MB if headroom holds, back toward 8 MB if
+// the port turns out to be unstable near the ceiling.
+//
+// reduceHeapSize() is libnds's tool for enforcing this: called here before
+// anything has allocated, it shrinks the malloc ceiling by a fixed number of
+// bytes, so whatever is held back is never handed out no matter what the game
+// does later -- an enforced ceiling, not a number game code has to remember to
+// respect.
 //
 // On a plain NDS-compatible build/launch (~3.5-4 MB natural ceiling) this is a
 // no-op: the natural ceiling is already below the target, so there is nothing
 // to trim.
-constexpr u32 DSI_HEAP_BUDGET_TARGET_KB = 8 * 1024; // ~half of 16 MB
+constexpr u32 DSI_HEAP_BUDGET_TARGET_KB = 12 * 1024; // 3/4 of 16 MB
 
 namespace DsiEarlyMemory
 {
