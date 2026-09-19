@@ -288,13 +288,15 @@ void runTerrainDemo()
 		{-0.5f,  0.5f,  0.5f, 0, 0}, { 0.5f,  0.5f,  0.5f, 1, 0}, { 0.5f,  0.5f, -0.5f, 1, 1}, {-0.5f,  0.5f, -0.5f, 0, 1},
 		{-0.5f, -0.5f, -0.5f, 0, 0}, { 0.5f, -0.5f, -0.5f, 1, 0}, { 0.5f, -0.5f,  0.5f, 1, 1}, {-0.5f, -0.5f,  0.5f, 0, 1},
 	};
-	// Three "blocks" at different floor positions, so overlapping/occluding
-	// geometry actually gets depth-tested against both the floor and each
-	// other, not just against itself like the single cube demo.
+	// Three blocks resting on the floor (y=0: the cube spans +/-0.5, so its
+	// bottom face sits exactly on the floor's y=-0.5 surface) at different
+	// X/Z, so overlapping/occluding geometry actually gets depth-tested
+	// against both the floor and each other, not just against itself like
+	// the single cube demo.
 	const float cubePositions[3][3] = {
 		{-1.0f, 0.0f, -0.5f},
 		{ 0.3f, 0.0f,  0.5f},
-		{ 1.2f, 0.5f, -1.0f}, // taller stack: y=0.5 sits one cube-height above the first two
+		{ 1.2f, 0.0f, -1.0f},
 	};
 
 	RenderInterleavedMesh floorMesh;
@@ -319,7 +321,6 @@ void runTerrainDemo()
 	renderEnable(RenderCapability::DepthTest);
 	renderEnable(RenderCapability::Texture2D);
 	renderBindTexture(texture);
-	renderColor3f(1.0f, 1.0f, 1.0f); // white: let the texture show its own colour
 
 	int angle = 0;
 	while (true)
@@ -331,7 +332,21 @@ void runTerrainDemo()
 		renderRotate((float)angle, 0.0f, 1.0f, 0.0f); // slow orbit around it
 		angle = (angle + 1) % 360;
 
+		// Floor and cubes share the same checker texture (see its comment --
+		// there is no real per-object art yet), so without a colour
+		// difference the two are impossible to tell apart at a glance: the
+		// first version of this demo looked like a single tilted checkered
+		// sheet with a jagged edge instead of "a floor with blocks standing
+		// on it" for exactly that reason. White leaves the floor's texture
+		// colours as authored; a reddish tint on the cubes multiplies over
+		// their copy of the same texture (DS's standard vertex-colour x
+		// texture modulation -- the same mechanism the lightmap bake in
+		// RenderAPI_DSI.cpp relies on) so they read as a visibly different,
+		// separate set of objects.
+		renderColor3f(1.0f, 1.0f, 1.0f);
 		renderDrawInterleaved(floorMesh);
+
+		renderColor3f(1.0f, 0.35f, 0.35f);
 		for (const float (&pos)[3] : cubePositions)
 		{
 			renderPushMatrix();
