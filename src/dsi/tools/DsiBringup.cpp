@@ -1,22 +1,23 @@
 // DsiBringup.cpp — Nintendo DSi toolchain/diagnostic bring-up.
 //
-// This is NOT the game entry point. It proves devkitARM/libnds/libfat link and
-// boot, and prints the numbers every later DSi decision in this port depends
-// on:
+// This is NOT the game entry point. It proves BlocksDS/libnds link and boot
+// (see src/dsi/Makefile -- this needs BlocksDS, not devkitARM/devkitPro), and
+// prints the numbers every later DSi decision in this port depends on:
 //
 //   1. Whether the ROM is actually running DSi-enhanced (isDSiMode()) and, if
-//      so, the real malloc heap ceiling. The project brief's 8-9 MB budget only
-//      exists past the original NDS's ~4 MB, and getting there needs the ROM
-//      built DSi-enhanced AND launched with SCFG_EXT access granted -- see the
-//      comment block in DsiEarlyMemory.cpp. This is the first place that finds
-//      out whether that is actually true on real hardware/melonDS, instead of
-//      the game silently budgeting against a number it never gets.
+//      so, the enforced malloc heap ceiling. Building against dsi_arm9.specs
+//      gets a retail DSi's real 16 MB of main RAM (confirmed against
+//      BlocksDS's own docs -- see DsiEarlyMemory.cpp), and
+//      DsiEarlyMemory.cpp caps it at the project brief's 8-9 MB budget with
+//      reduceHeapSize(), leaving the rest untouched as crash margin. This is
+//      the first place that confirms that actually happened on real
+//      hardware/an emulator instead of the game silently assuming it.
 //   2. Byte order and type sizes. The ARM9 is little-endian, like the PS2's EE
 //      and unlike the Wii's Broadway, so NBT/region files should need no new
 //      branch -- but this is the cheapest place to confirm it rather than
 //      assume it.
-//   3. Whether libfat mounts the SD card at all, which is where chunk streaming
-//      (see the project brief) will read and write.
+//   3. Whether the SD card mounts at all, which is where chunk streaming (see
+//      the project brief) will read and write.
 //
 // Uses its own console-friendly video setup (sub screen as a text console)
 // instead of dsiEnsureEarlyVideo(), which blanks the bottom screen for the real
@@ -47,15 +48,15 @@ void reportDsiMode()
 	std::printf("MODE    %s\n", isDSiMode() ? "DSi-enhanced (TWL)" : "NDS-compatible");
 }
 
-// getHeapLimit()/getHeapStart()/getHeapEnd() are the same newlib sbrk view
-// DsiEarlyMemory.cpp reads; printed directly here too so a bring-up run needs
-// no other file to answer "how much RAM do I actually have".
+// dsiGetHeapCeiling() already applies DsiEarlyMemory's reduceHeapSize() cap, so
+// in DSi mode this should read ~8192 KB (the enforced budget), not the raw
+// 16 MB the console actually has -- that's the point of printing it here.
 void reportMemory()
 {
 	const u32 ceilingKb = dsiGetHeapCeiling() / 1024u;
 	const u32 committedKb = dsiGetHeapCommitted() / 1024u;
-	std::printf("HEAP    %u KB ceiling, %u KB committed\n", ceilingKb, committedKb);
-	std::printf("TARGET  8192-9216 KB (brief); PS2 used ~14336 of 32768\n");
+	std::printf("HEAP    %u KB ceiling (enforced), %u KB committed\n", ceilingKb, committedKb);
+	std::printf("BUDGET  8192 KB target; PS2 used ~14336 of 32768\n");
 }
 
 void reportByteOrder()

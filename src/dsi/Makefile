@@ -1,112 +1,172 @@
-#---------------------------------------------------------------------------------
-# Standalone devkitARM bring-up Makefile for the DSi port.
+# SPDX-License-Identifier: CC0-1.0
 #
-# This is deliberately NOT wired into the top-level CMakeLists.txt yet -- that
-# needs a real cmake/dsi_toolchain.cmake + cmake/dsi.cmake pair mirroring
-# cmake/wii.cmake/wii_toolchain.cmake, including SourceSelection.cmake picking
-# the right subset of src/platform for the DSi target. That is follow-up work
-# once this boots. Until then, build with:
+# BlocksDS bring-up Makefile for the DSi port, based on BlocksDS's
+# templates/rom_arm9_only. Needs BlocksDS + Wonderful Toolchain, not
+# devkitARM/devkitPro -- see the readme note below for why.
 #
 #   cd src/dsi && make
 #
-# Needs devkitARM + libnds + libfat, e.g. from the devkitPro pacman repo:
-#   sudo dkp-pacman -S nds-dev
+# Install (Linux/WSL): https://wonderful.asie.pl/wiki/doku.php?id=getting_started
+# then:
+#   export PATH=/opt/wonderful/bin:$PATH
+#   wf-pacman -Syu wf-tools && wf-config repo enable blocksds && wf-pacman -Syu
+#   wf-pacman -S blocksds-toolchain
+#   ln -s /opt/wonderful/thirdparty/blocksds /opt/blocksds
 #
-# Produces DsiBringup.nds. Run it in an emulator (melonDS, no$gba) or on real
-# hardware via a flashcard/TWiLight Menu++. It is the toolchain smoke test, not
-# the game -- see DsiBringup.cpp for what it checks and why.
-#---------------------------------------------------------------------------------
-.SUFFIXES:
+# Produces DsiBringup.nds.
 
-ifeq ($(strip $(DEVKITARM)),)
-$(error "Please set DEVKITARM in your environment. export DEVKITARM=<path to>devkitARM")
-endif
+export BLOCKSDS			?= /opt/blocksds/core
+export BLOCKSDSEXT		?= /opt/blocksds/external
 
-include $(DEVKITARM)/ds_rules
+export WONDERFUL_TOOLCHAIN	?= /opt/wonderful
+ARM_NONE_EABI_PATH	?= $(WONDERFUL_TOOLCHAIN)/toolchain/gcc-arm-none-eabi/bin/
 
-TARGET		:=	DsiBringup
-BUILD		:=	build
+NAME		:= DsiBringup
+
 # tools/ has the smoke-test main; system/ has the early video/memory modules it
-# calls into (and DsiEarlyVideo.cpp, unused by the smoke test itself, compiles
-# here too so the "real game" init code is proven against the real toolchain).
-SOURCES		:=	tools system
+# calls into (DsiEarlyVideo.cpp, unused by the smoke test itself, compiles here
+# too so the "real game" init code is proven against the real toolchain).
+SOURCEDIRS	:= tools system
 # ".." is src/ -- both this port's own headers ("dsi/...") and the shared
 # "platform/Log.h" this code logs through are rooted there.
-INCLUDES	:=	..
+INCLUDEDIRS	:= ..
+# No graphics/audio/NitroFS asset pipeline yet -- this Makefile only has S/C/CPP
+# compile rules below. Copy those sections from
+# $(BLOCKSDS)/../templates/rom_arm9_only/Makefile (grit for GFXDIRS, mmutil for
+# AUDIODIRS, bin2c for BINDIRS) once real assets exist.
 
-ARCH	:=	-march=armv5te -mtune=arm946e-s -mthumb
+DEFINES		:= -DDSI_PLATFORM=1
 
-CFLAGS	:=	-g -Wall -O2 -ffunction-sections -fdata-sections -DDSI_PLATFORM=1 $(ARCH)
-CFLAGS	+=	$(INCLUDE) -DARM9
-CXXFLAGS	:=	$(CFLAGS) -std=gnu++17 -fno-rtti -fno-exceptions
+# No custom ARM7 code and no DSWiFi/audio yet, so the prebuilt "libnds only"
+# core is enough. Swap to arm7_dswifi_maxmod.elf once networking/audio land.
+ARM7ELF		:= $(BLOCKSDS)/sys/arm7/main_core/arm7_minimal.elf
 
-ASFLAGS	:=	-g $(ARCH)
-LDFLAGS	=	-specs=ds_arm9.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+LIBS		:= -lnds9
+LIBDIRS		:= $(BLOCKSDS)/libs/libnds
 
-LIBS	:=	-lfat -lnds9
+BUILDDIR	:= build/$(NAME)
+ELF		:= build/$(NAME).elf
+DUMP		:= build/$(NAME).dump
+MAP		:= build/$(NAME).map
+ROM		:= $(NAME).nds
 
-LIBDIRS	:=	$(LIBNDS)
+PREFIX		:= $(ARM_NONE_EABI_PATH)arm-none-eabi-
+CC		:= $(PREFIX)gcc
+CXX		:= $(PREFIX)g++
+LD		:= $(PREFIX)gcc
+OBJDUMP		:= $(PREFIX)objdump
+MKDIR		:= mkdir
+RM		:= rm -rf
 
-#---------------------------------------------------------------------------------
-ifneq ($(BUILD),$(notdir $(CURDIR)))
-#---------------------------------------------------------------------------------
+ifeq ($(VERBOSE),1)
+V		:=
+else
+V		:= @
+endif
 
-export OUTPUT	:=	$(CURDIR)/$(TARGET)
-
-export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
-# platform/Log.cpp is the shared logger DsiEarlyMemory.cpp/DsiEarlyVideo.cpp call
-# through (MC_LOG_INFO). Its own #if PLATFORM_WII branch is inert here (this
-# build defines DSI_PLATFORM, not WII_PLATFORM), so it is safe to pull in on its
+SOURCES_S	:= $(shell find -L $(SOURCEDIRS) -name "*.s")
+SOURCES_C	:= $(shell find -L $(SOURCEDIRS) -name "*.c")
+SOURCES_CPP	:= $(shell find -L $(SOURCEDIRS) -name "*.cpp")
+# platform/Log.cpp is the shared logger DsiEarlyMemory.cpp/DsiEarlyVideo.cpp
+# call through (MC_LOG_INFO). Its own #if PLATFORM_WII branch is inert here
+# (DSI_PLATFORM is defined, not WII_PLATFORM), so it is safe to pull in on its
 # own without the rest of src/platform, which is NOT safe: most of it assumes
 # PC/PS2/Wii headers (SDL2, glad, gccore.h, ...) this Makefile does not provide.
-export VPATH	+=	$(CURDIR)/../platform
-export DEPSDIR	:=	$(CURDIR)/$(BUILD)
+# The literal ".." in this path is intentional -- see BUILDDIR note below.
+SOURCES_CPP	+= ../platform/Log.cpp
 
-CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
-CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
-CPPFILES	+=	Log.cpp
-SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
-BINFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.bin)))
+DEFINES		+= -D__NDS__ -D__BLOCKSDS__ -DARM9
 
-ifeq ($(strip $(CPPFILES)),)
-	export LD	:=	$(CC)
+ARCH		:= -mthumb -mcpu=arm946e-s+nofp
+
+# The one line that actually unlocks the DSi's extended RAM: ds_arm9.specs
+# targets the classic ~4 MB NDS-compatible layout, dsi_arm9.specs targets the
+# 16 MB DSi layout (see docs/guides/usage_notes.md "ARM9 options" and
+# docs/internal/memory_map.md section 4.1 in the BlocksDS repo). This is what
+# DsiEarlyMemory.cpp's isDSiMode()/getHeapLimit() readout at boot is there to
+# confirm actually landed, since it depends on how the .nds is launched too
+# (DSi Menu / a loader that respects the DSi-enhanced header), not just on how
+# it was compiled.
+SPECS		:= $(BLOCKSDS)/sys/crts/dsi_arm9.specs
+
+WARNFLAGS	:= -Wall
+
+ifeq ($(SOURCES_CPP),)
+	LIBS	+= -lc
 else
-	export LD	:=	$(CXX)
+	LIBS	+= -lstdc++ -lc
 endif
 
-export OFILES	:=	$(BINFILES:.bin=.o) \
-					$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
+INCLUDEFLAGS	:= $(foreach path,$(INCLUDEDIRS),-I$(path)) \
+		   $(foreach path,$(LIBDIRS),-I$(path)/include)
 
-export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
-					$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
-					-I$(CURDIR)/$(BUILD)
+LIBDIRSFLAGS	:= $(foreach path,$(LIBDIRS),-L$(path)/lib)
 
-export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+ASFLAGS		+= -x assembler-with-cpp $(INCLUDEFLAGS) $(DEFINES) \
+		   $(ARCH) -ffunction-sections -fdata-sections \
+		   -specs=$(SPECS)
 
-.PHONY: $(BUILD) clean
+CFLAGS		+= $(WARNFLAGS) $(INCLUDEFLAGS) $(DEFINES) \
+		   $(ARCH) -O2 -ffunction-sections -fdata-sections \
+		   -specs=$(SPECS)
 
-$(BUILD):
-	@[ -d $@ ] || mkdir -p $@
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+CXXFLAGS	+= $(WARNFLAGS) $(INCLUDEFLAGS) $(DEFINES) \
+		   $(ARCH) -O2 -ffunction-sections -fdata-sections \
+		   -std=gnu++17 -fno-exceptions -fno-rtti \
+		   -specs=$(SPECS)
+
+LDFLAGS		+= $(ARCH) $(LIBDIRSFLAGS) -Wl,-Map,$(MAP) $(DEFINES) \
+		   -Wl,--start-group $(LIBS) -Wl,--end-group -specs=$(SPECS)
+
+OBJS_SOURCES	:= $(addsuffix .o,$(addprefix $(BUILDDIR)/,$(SOURCES_S))) \
+		   $(addsuffix .o,$(addprefix $(BUILDDIR)/,$(SOURCES_C))) \
+		   $(addsuffix .o,$(addprefix $(BUILDDIR)/,$(SOURCES_CPP)))
+
+OBJS		:= $(OBJS_SOURCES)
+
+DEPS		:= $(OBJS:.o=.d)
+
+.PHONY: all clean dump
+
+all: $(ROM)
+
+# No -b/icon/title-banner: there is no artwork yet and the icon is optional
+# (BlocksDS docs/internal/build_process.md section 5). Add GAME_TITLE/
+# GAME_SUBTITLE/GAME_AUTHOR/GAME_ICON and pass
+# "-b $(GAME_ICON) \"$(GAME_TITLE);$(GAME_SUBTITLE);$(GAME_AUTHOR)\""
+# once real art exists.
+$(ROM): $(ELF)
+	@echo "  NDSTOOL $@"
+	$(V)$(BLOCKSDS)/tools/ndstool/ndstool -c $@ \
+		-7 $(ARM7ELF) -9 $(ELF)
+
+$(ELF): $(OBJS)
+	@echo "  LD      $@"
+	$(V)$(LD) -o $@ $(OBJS) $(LDFLAGS)
+
+$(DUMP): $(ELF)
+	@echo "  OBJDUMP   $@"
+	$(V)$(OBJDUMP) -h -C -S $< > $@
+
+dump: $(DUMP)
 
 clean:
-	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).elf $(TARGET).nds $(TARGET).ds.gba
+	@echo "  CLEAN"
+	$(V)$(RM) $(ROM) $(DUMP) build compile_commands.json
 
-#---------------------------------------------------------------------------------
-else
+$(BUILDDIR)/%.s.o : %.s
+	@echo "  AS      $<"
+	@$(MKDIR) -p $(@D)
+	$(V)$(CC) $(ASFLAGS) -MMD -MP -c -o $@ $<
 
-DEPENDS	:=	$(OFILES:.o=.d)
+$(BUILDDIR)/%.c.o : %.c
+	@echo "  CC      $<"
+	@$(MKDIR) -p $(@D)
+	$(V)$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
 
-$(OUTPUT).nds	: 	$(OUTPUT).elf
-$(OUTPUT).elf	:	$(OFILES)
+$(BUILDDIR)/%.cpp.o : %.cpp
+	@echo "  CXX     $<"
+	@$(MKDIR) -p $(@D)
+	$(V)$(CXX) $(CXXFLAGS) -MMD -MP -c -o $@ $<
 
-%.o	:	%.bin
-	@echo $(notdir $<)
-	$(bin2o)
-
--include $(DEPENDS)
-
-#---------------------------------------------------------------------------------
-endif
-#---------------------------------------------------------------------------------
+-include $(DEPS)

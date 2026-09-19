@@ -8,11 +8,11 @@
 // "flat black" means in terms of VRAM banks and display power.
 void dsiEnsureEarlyVideo();
 
-// Upper bound of the malloc heap right now, in bytes. On the DSi this is the
-// newlib sbrk ceiling (getHeapLimit()), which is ~3.5-4 MB unless the ROM is
-// running DSi-enhanced with SCFG_EXT-granted access to the extended RAM region
-// -- see the comment block in DsiEarlyMemory.cpp before assuming this reads
-// close to the 8-9 MB target from the project brief.
+// Upper bound of the malloc heap right now, in bytes. Built against
+// dsi_arm9.specs (see src/dsi/Makefile) and launched DSi-enhanced, this is the
+// project brief's 8-9 MB budget, deliberately capped there by reduceHeapSize()
+// even though the DSi has 16 MB -- see DsiEarlyMemory.cpp. Built/launched as
+// plain NDS-compatible instead, it is the natural ~3.5-4 MB ceiling.
 u32 dsiGetHeapCeiling();
 
 // Bytes currently committed to the malloc heap (getHeapEnd() - getHeapStart()).
