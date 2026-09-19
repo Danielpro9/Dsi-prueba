@@ -37,6 +37,16 @@
 #  endif
 #endif
 
+// PLATFORM_DSI    -> Nintendo DSi only. Use for libnds, the ARM9 GL wrapper,
+//                    FAT/NitroFS paths, main-RAM budget tracking, etc.
+#ifndef PLATFORM_DSI
+#  if defined(DSI_PLATFORM)
+#    define PLATFORM_DSI 1
+#  else
+#    define PLATFORM_DSI 0
+#  endif
+#endif
+
 // User-facing hardware calibration features.
 #ifndef PLATFORM_HAS_CONTROLLER_CALIBRATION
 #  define PLATFORM_HAS_CONTROLLER_CALIBRATION (PLATFORM_PS2 || PLATFORM_WII)
