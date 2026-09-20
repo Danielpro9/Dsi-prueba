@@ -37,7 +37,15 @@ SOURCEDIRS	:= ../client ../java ../net ../util ../platform ../external system lw
 # "compat" first: for #include <...>, -I directories are searched in the
 # order given, before the compiler's own built-in system headers either way,
 # but listing it first here keeps that precedence obvious at a glance.
-INCLUDEDIRS	:= compat ..
+#
+# ../../external/zlib and ../../external/stb are git submodules at the repo
+# root (see ../../.gitmodules), the same ones the PC CMake target links
+# against (zlibstatic) and includes (stb) -- RegionFile.cpp/
+# CompressedStreamTools.cpp/etc need <zlib.h> for chunk/NBT compression (the
+# same "chunk streaming to SD" feature this whole port started from), and
+# src/external/stb_image.cpp needs stb_image.h. Neither has a DSi-specific
+# replacement: it is the same zlib deflate/inflate code every platform uses.
+INCLUDEDIRS	:= compat .. ../../external/zlib ../../external/stb build/$(NAME)/zconf
 
 DEFINES		:= -DDSI_PLATFORM=1
 
@@ -53,6 +61,16 @@ ELF		:= build/$(NAME).elf
 DUMP		:= build/$(NAME).dump
 MAP		:= build/$(NAME).map
 ROM		:= $(NAME).nds
+
+# zlib's own CMakeLists.txt generates zconf.h from zconf.h.cmakein via CMake's
+# configure_file() into the (CMake) build directory, never the source tree --
+# there is no configure script to run for a plain Makefile build instead, and
+# grep confirms zconf.h.cmakein has nothing to substitute besides an RCS-ID
+# comment (no real @VAR@ platform probing), so copying it verbatim is exactly
+# what that configure_file() call would have produced. Generated into our own
+# build/ dir, same as CMake would, rather than the submodule's checked-out
+# source tree.
+$(shell $(MKDIR) -p $(BUILDDIR)/zconf && cp -n ../../external/zlib/zconf.h.cmakein $(BUILDDIR)/zconf/zconf.h)
 
 PREFIX		:= $(ARM_NONE_EABI_PATH)arm-none-eabi-
 CC		:= $(PREFIX)gcc
@@ -70,6 +88,24 @@ endif
 
 SOURCES_S	:= $(shell find -L $(SOURCEDIRS) -name "*.s")
 SOURCES_C	:= $(shell find -L $(SOURCEDIRS) -name "*.c")
+
+# zlib itself (see the zconf.h comment above) -- the same source list as
+# external/zlib/CMakeLists.txt's ZLIB_SRCS, minus the Windows resource files.
+SOURCES_C	+= ../../external/zlib/adler32.c \
+		   ../../external/zlib/compress.c \
+		   ../../external/zlib/crc32.c \
+		   ../../external/zlib/deflate.c \
+		   ../../external/zlib/gzclose.c \
+		   ../../external/zlib/gzlib.c \
+		   ../../external/zlib/gzread.c \
+		   ../../external/zlib/gzwrite.c \
+		   ../../external/zlib/inflate.c \
+		   ../../external/zlib/infback.c \
+		   ../../external/zlib/inftrees.c \
+		   ../../external/zlib/inffast.c \
+		   ../../external/zlib/trees.c \
+		   ../../external/zlib/uncompr.c \
+		   ../../external/zlib/zutil.c
 
 # The full common tree pulls in every platform's own backend file for each
 # family (RenderAPI_PC.cpp, RenderAPI_GX_WII.cpp, ...) since they all live

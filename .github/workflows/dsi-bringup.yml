@@ -96,8 +96,16 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
+      # submodules: true, unlike the other jobs in this workflow -- the full
+      # game tree needs external/zlib (RegionFile.cpp/CompressedStreamTools.cpp
+      # chunk/NBT compression) and external/stb (src/external/stb_image.cpp).
+      # Checks out every top-level submodule (also SDL2/SDL_net/miniaudio/
+      # gzip-hpp, unused by this target but harmless), not just those two --
+      # actions/checkout has no per-submodule selection.
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Build OptiCraftDsi.nds inside the BlocksDS container
         run: |
