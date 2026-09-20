@@ -330,9 +330,11 @@ void WorldRenderer::updateInFrustrum(ICamera *icamera)
 	const int cls = icamera->classifyBoundingBox(rendererBoundingBox);
 	isInFrustum = (cls != 0);
 	isFullyInFrustum = (cls == 2);
-#elif PLATFORM_WII
+#elif PLATFORM_WII || PLATFORM_DSI
 	// GX has no occlusion queries, so the stronger fully-inside classification
-	// is dead work here. A plain frustum test is the complete Wii contract.
+	// is dead work here. A plain frustum test is the complete Wii contract --
+	// the DS 3D engine has no occlusion queries either (see RenderAPI_DSI.cpp),
+	// so the same reasoning applies.
 	isInFrustum = icamera->isBoundingBoxInFrustum(rendererBoundingBox);
 #else
 	if (Config::isOcclusionFancy())

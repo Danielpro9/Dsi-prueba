@@ -1401,10 +1401,12 @@ int_t RenderGlobal::renderSortedRenderers(int_t i, int_t j, int_t k, double d)
 			(useOcclusion && !sortedRenderer->isVisible))
 			continue;
 
-#if PLATFORM_PS2 || defined(WII_PLATFORM)
+#if PLATFORM_PS2 || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 		// Native console terrain uses the renderer itself as the draw contract.
 		// Visibility/pass checks above are sufficient; Wii resolves a GX handle
-		// later when RenderList submits the batch.
+		// later when RenderList submits the batch. DSi has no display-list/GL-
+		// call-list capability at all (see RenderAPI_DSI.cpp), so it takes this
+		// same contract-only path.
 		renderBatchRenderers.push_back(sortedRenderer);
 		l++;
 #else

@@ -4,6 +4,10 @@
 
 #if defined(PS2_PLATFORM)
 #include "platform/time.h"
+#elif defined(DSI_PLATFORM)
+// Same hardware tick counter PlatformCompat::getTicks() already reads on
+// this platform -- see that file's comment for why std::chrono is avoided.
+#include <nds/system_counter.h>
 #else
 #include <ogc/lwp_watchdog.h>
 #endif
@@ -21,9 +25,11 @@ inline int consoleInputNowMs()
 {
 #if defined(PS2_PLATFORM)
 	return (int)(getTimeS() * 1000.0f);
+#elif defined(DSI_PLATFORM)
+	return (int)systemCounterTicksToMsec(static_cast<u32>(systemCounterGetTicks()));
 #else
 	return (int)ticks_to_millisecs(gettime());
 #endif
 }
 
-#endif // PS2_PLATFORM || WII_PLATFORM
+#endif // PS2_PLATFORM || WII_PLATFORM || DSI_PLATFORM
