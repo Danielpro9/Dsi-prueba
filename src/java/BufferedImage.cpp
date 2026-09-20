@@ -5,6 +5,10 @@
 #include <stdexcept>
 
 #include "stb_image.h"
+#include "platform/PlatformConfig.h"
+#if PLATFORM_DSI
+#include "platform/Log.h"
+#endif
 
 std::size_t BufferedImage::checkedPixelCount(int_t width, int_t height)
 {
@@ -151,6 +155,25 @@ BufferedImage BufferedImage::ImageIO_read(std::istream &in)
 	if (raw_data == nullptr)
 		throw std::runtime_error(std::string("ImageIO_read: decode failed: ") +
 		                         (stbi_failure_reason() ? stbi_failure_reason() : "unknown"));
+
+#if PLATFORM_DSI
+	// Diagnostic for the "font text looks covered by white" report: comp==1
+	// (grayscale) and comp==3 (RGB) below both force alpha=255 for every
+	// pixel unconditionally, since those formats have no alpha channel to
+	// read. That is correct for a texture that is genuinely meant to be
+	// fully opaque, but wrong for one that needs real per-pixel transparency
+	// (a font atlas's glyph cutouts, a button background's rounded corners)
+	// -- if the shipped asset for one of those was exported/converted
+	// without an alpha channel, this is exactly what would make it render
+	// as a solid block instead of showing just the glyph/shape through a
+	// transparent background. No resource name is threaded down to this
+	// function (every caller decodes through the same shared path), so
+	// width/height is what this can log -- font/default.png is
+	// characteristically 128x128, gui/gui.png similarly small and square,
+	// which should be enough to recognise them in the next debug.log.
+	if (comp == 1 || comp == 3)
+		MC_LOG_WARN("render", "decoded %dx%d image with comp=%d (no real alpha channel)\n", w, h, comp);
+#endif
 
 	// Convert to RGBA. Keep all size arithmetic in size_t so malformed image
 	// dimensions cannot wrap into an undersized allocation.

@@ -314,16 +314,30 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 	// transparent, so reading only the first vertex would render one of
 	// them at alpha 0 -- effectively deleting it -- instead of the
 	// in-between value the average gives both.
+	//
+	// Sampling first+last (not a full per-vertex scan) is enough: every
+	// caller of this path is either uniform alpha across the whole mesh
+	// (glyph batches -- a full menu screen's worth of text lands in one
+	// draw call here, easily hundreds of vertices, all sharing FontRenderer's
+	// one currentA -- and most other UI/terrain draws), where first == last
+	// gives the exact value for free, or a straight linear gradient like
+	// drawGradientRect's two quads, where the two endpoints alone already
+	// average to the exact in-between value a full scan would compute (the
+	// two middle vertices share one or the other endpoint's alpha, so they
+	// add nothing a full scan wouldn't already cancel out). A full O(n) scan
+	// here previously ran on every hundred-plus-vertex text batch every
+	// frame on a CPU with no hardware float unit (arm946e-s+nofp) -- real,
+	// measurable overhead for zero difference in the result for anything
+	// this engine actually draws.
 	if (mesh.hasColor)
 	{
-		unsigned int alphaSum = 0;
-		for (int i = 0; i < mesh.count; ++i)
-		{
-			std::uint8_t alpha;
-			std::memcpy(&alpha, base + (std::size_t)i * mesh.stride + mesh.colorOffset + 3, sizeof(alpha));
-			alphaSum += alpha;
-		}
-		const float averageAlpha = static_cast<float>(alphaSum) / (255.0f * static_cast<float>(mesh.count));
+		std::uint8_t alphaFirst;
+		std::memcpy(&alphaFirst, base + mesh.colorOffset + 3, sizeof(alphaFirst));
+		std::uint8_t alphaLast = alphaFirst;
+		if (mesh.count > 1)
+			std::memcpy(&alphaLast, base + (std::size_t)(mesh.count - 1) * mesh.stride + mesh.colorOffset + 3, sizeof(alphaLast));
+		const unsigned int alphaSum = static_cast<unsigned int>(alphaFirst) + static_cast<unsigned int>(alphaLast);
+		const float averageAlpha = static_cast<float>(alphaSum) / (255.0f * 2.0f);
 		g_poly.alpha31 = static_cast<std::uint8_t>(averageAlpha * 31.0f + 0.5f);
 		markPolyDirty();
 	}
@@ -378,6 +392,14 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 	// touched briefly for camera/ortho setup, never held across a
 	// Tessellator draw).
 	constexpr float kVertexScale = 256.0f;
+	// Multiply by the reciprocal instead of dividing by kVertexScale below:
+	// same result (kVertexScale is an exact power of two, so this reciprocal
+	// is exact too, no precision lost), but division is one of the slower
+	// operations a *hardware* FPU has, and this ARM9 (arm946e-s+nofp) has no
+	// FPU at all -- every one of these was a soft-float library call, three
+	// per vertex, every vertex, every draw call in the whole engine. Real
+	// cost on a menu screen's text batch alone (a few hundred vertices).
+	constexpr float kInvVertexScale = 1.0f / kVertexScale;
 	glPushMatrix();
 	glScalef(kVertexScale, kVertexScale, kVertexScale);
 
@@ -404,9 +426,10 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 		}
 		if (mesh.hasNormals)
 		{
+			constexpr float kInvNormalScale = 1.0f / 127.0f;
 			std::int8_t normal[3];
 			std::memcpy(normal, vertex + mesh.normalOffset, sizeof(normal));
-			glNormal3f(normal[0] / 127.0f, normal[1] / 127.0f, normal[2] / 127.0f);
+			glNormal3f(normal[0] * kInvNormalScale, normal[1] * kInvNormalScale, normal[2] * kInvNormalScale);
 		}
 		if (mesh.hasTexture)
 		{
@@ -429,7 +452,7 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 			// set it fails loudly (garbage values, not silently) instead of
 			// this comment going stale.
 		}
-		glVertex3f(position[0] / kVertexScale, position[1] / kVertexScale, position[2] / kVertexScale);
+		glVertex3f(position[0] * kInvVertexScale, position[1] * kInvVertexScale, position[2] * kInvVertexScale);
 	}
 	glEnd();
 	glPopMatrix(1);
