@@ -8,11 +8,16 @@
 // calls to __atomic_* library functions instead of inlining them. Confirmed
 // call sites from the real linker's own "undefined reference" errors,
 // before -latomic was tried:
-//   __atomic_load_8     <- Random::Random()'s std::atomic seed state
-//   __atomic_exchange_4 <- ThreadDownloadImageData's destructor
+//   __atomic_load_8              <- Random::Random()'s std::atomic seed state
+//   __atomic_exchange_4          <- ThreadDownloadImageData's destructor
+//   __atomic_compare_exchange_8  <- Random::Random() too (same seed state's
+//                                    compare_exchange, found only after the
+//                                    first two were already resolved -- the
+//                                    linker reports one missing symbol at a
+//                                    time, not the whole set up front)
 //
 // This is not a general-purpose libatomic replacement: it only defines the
-// two symbols actually referenced, and it is correct ONLY because DSi has
+// symbols actually referenced, and it is correct ONLY because DSi has
 // no real concurrency to race against. Confirmed empirically against this
 // same toolchain (see the "thread-probe" CI job and PlatformConfig.h's
 // PLATFORM_ASYNC_FILE_IO comment): std::thread here has no constructor able
@@ -29,6 +34,7 @@
 #ifdef DSI_PLATFORM
 
 #include <stdint.h>
+#include <stdbool.h>
 
 unsigned long long __atomic_load_8(const volatile void *ptr, int memorder)
 {
@@ -43,6 +49,28 @@ unsigned int __atomic_exchange_4(volatile void *ptr, unsigned int val, int memor
 	unsigned int old = *p;
 	*p = val;
 	return old;
+}
+
+// GCC's __atomic_compare_exchange_N ABI: if *ptr == *expected, writes
+// desired into *ptr and returns 1 (success). Otherwise writes the current
+// *ptr into *expected and returns 0. "weak" (spurious-failure allowed) does
+// not matter here -- there is nothing to spuriously fail against without
+// real concurrency, so this always behaves like the "strong" form.
+bool __atomic_compare_exchange_8(volatile void *ptr, void *expected, unsigned long long desired,
+	bool weak, int success_memorder, int failure_memorder)
+{
+	(void)weak;
+	(void)success_memorder;
+	(void)failure_memorder;
+	volatile unsigned long long *p = (volatile unsigned long long *)ptr;
+	unsigned long long *exp = (unsigned long long *)expected;
+	if (*p == *exp)
+	{
+		*p = desired;
+		return true;
+	}
+	*exp = *p;
+	return false;
 }
 
 #endif // DSI_PLATFORM
