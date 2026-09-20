@@ -28,9 +28,23 @@ on:
   push:
     branches:
       - claude/dsi-backend-memory-setup-nvtg0d
+    # Mirrors Makefile.game's SOURCEDIRS: ../client ../java ../net ../util
+    # ../platform ../external (relative to src/dsi/), plus src/dsi/ itself
+    # for the DSi-local dirs that Makefile lists bare (system, lwjgl, java,
+    # minecraft, compat). Previously just src/dsi/** and src/platform/**,
+    # which silently missed src/net/minecraft/src/**, src/client/**, src/
+    # java/**, src/util/** and src/external/** -- most commits touching only
+    # those didn't trigger a build at all (a commit editing GuiMainMenu.cpp
+    # alone, for example, just sat there with no CI feedback). Caught only
+    # because a commit that changed nothing else finally exposed it.
     paths:
       - 'src/dsi/**'
       - 'src/platform/**'
+      - 'src/client/**'
+      - 'src/java/**'
+      - 'src/net/**'
+      - 'src/util/**'
+      - 'src/external/**'
       - '.github/workflows/dsi-bringup.yml'
   workflow_dispatch: {}
 
