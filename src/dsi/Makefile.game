@@ -28,12 +28,11 @@ NAME		:= OptiCraftDsi
 # own system/ (early init) and lwjgl/ (Display_dsi.cpp) trees. NOT "tools" or
 # "probe": those hold DsiBringup.cpp's and ThreadProbe.cpp's own main(),
 # which would collide with main_dsi.cpp's below.
-# NOT "compat": that shadow-header directory is deliberately excluded from
-# the recursive .cpp search below (it holds no .cpp files anyway) and only
-# feeds INCLUDEDIRS, so #include <mutex>/<thread>/<condition_variable>
-# resolve to it instead of the real toolchain's versions. See
-# src/dsi/compat/mutex for why.
-SOURCEDIRS	:= ../client ../java ../net ../util ../platform ../external system lwjgl java minecraft
+# "compat" is here for dsi_atomic_fallback.c (see that file), not for the
+# shadow headers -- mutex/thread/condition_variable have no extension, so
+# find -name "*.c"/"*.cpp" below never matches them; they still only feed
+# INCLUDEDIRS as before.
+SOURCEDIRS	:= ../client ../java ../net ../util ../platform ../external system lwjgl java minecraft compat
 # "compat" first: for #include <...>, -I directories are searched in the
 # order given, before the compiler's own built-in system headers either way,
 # but listing it first here keeps that precedence obvious at a glance.
@@ -53,15 +52,15 @@ DEFINES		:= -DDSI_PLATFORM=1
 # core is enough. Swap to arm7_dswifi_maxmod.elf once networking/audio land.
 ARM7ELF		:= $(BLOCKSDS)/sys/arm7/main_core/arm7_minimal.elf
 
-# -latomic: the ARM946E-S (ARMv5TE) has no LDREXD/STREXD, so GCC emits calls
-# to __atomic_load_8/__atomic_exchange_4 (confirmed by the real BlocksDS
-# linker: "undefined reference to `__atomic_load_8'" from Random::Random()'s
-# std::atomic seed state, and to __atomic_exchange_4 from
-# ThreadDownloadImageData's destructor) for any 64-bit (and some 32-bit)
-# std::atomic that this CPU can't do a native RMW on. libatomic provides
-# those as lock-based fallbacks; every arm-none-eabi-gcc distribution ships
-# it alongside libstdc++/libgcc.
-LIBS		:= -lnds9 -latomic
+# NOT -latomic: tried that first (the ARM946E-S/ARMv5TE has no LDREXD/STREXD,
+# so GCC emits __atomic_load_8/__atomic_exchange_4 calls for some std::atomic
+# ops -- see compat/dsi_atomic_fallback.c's own comment for the confirmed
+# call sites), but the real BlocksDS/Wonderful linker rejects it outright:
+# "ld: cannot find -latomic: Invalid argument" -- this toolchain's arm9
+# multilib does not ship one. compat/dsi_atomic_fallback.c provides the two
+# confirmed-needed symbols directly instead (compiled in via SOURCEDIRS
+# picking up "compat", see below).
+LIBS		:= -lnds9
 LIBDIRS		:= $(BLOCKSDS)/libs/libnds
 
 BUILDDIR	:= build/$(NAME)
