@@ -617,4 +617,17 @@ void GuiMainMenu::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
     }
 
     GuiScreen::drawScreen(mouseX, mouseY, partialTick);
+
+#if PLATFORM_DSI
+    // Real-hardware diagnostic, requested directly after several rounds of
+    // reported lag in this exact screen (severe, and possibly worse after
+    // the last fix) with no way to see actual numbers without pulling the
+    // SD card's debug.log. mc->debug is already computed once a second by
+    // Minecraft::run()'s frame-count loop regardless of which screen is
+    // showing -- the same string GuiIngame's F3 overlay reads in-world --
+    // just never drawn while a GuiScreen (not GuiIngame) owns the frame, so
+    // it has been invisible here specifically until now.
+    if (fontRenderer != nullptr && mc != nullptr)
+        fontRenderer->drawStringWithShadow(mc->debug, 2, 2, 0xffffff);
+#endif
 }
