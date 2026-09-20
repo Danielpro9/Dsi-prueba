@@ -129,6 +129,45 @@ jobs:
             src/dsi/build/OptiCraftDsi.map
           if-no-files-found: warn
 
+      # Same reasoning as "build" job's own dist/dsi/DsiBringup.nds commit
+      # below: the artifact above downloads through Azure Blob Storage,
+      # blocked by the sandbox's network policy this was developed under, so
+      # the built ROM also gets committed straight into the repo instead.
+      # dist/ is outside this workflow's own paths: filter, so this commit
+      # does not re-trigger the build. Runs only when the build step actually
+      # produced a .nds (this job is continue-on-error and make -k can exit
+      # non-zero with a partial build). Retries the push a few times because
+      # this job runs in parallel with "build", which also pushes to
+      # dist/dsi/ -- a plain `git push` can lose that race.
+      - name: Commit built ROM into dist/dsi/
+        if: always()
+        run: |
+          if [ ! -f src/dsi/OptiCraftDsi.nds ]; then
+            echo "No OptiCraftDsi.nds produced; nothing to commit."
+            exit 0
+          fi
+          mkdir -p dist/dsi
+          cp src/dsi/OptiCraftDsi.nds dist/dsi/OptiCraftDsi.nds
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dist/dsi/OptiCraftDsi.nds
+          if git diff --cached --quiet; then
+            echo "Built ROM unchanged; nothing to commit."
+            exit 0
+          fi
+          git commit -m "CI: update built OptiCraftDsi.nds [skip ci]"
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt), rebasing onto latest and retrying..."
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME"
+            sleep $((attempt * 2))
+          done
+          echo "::error::Failed to push dist/dsi/OptiCraftDsi.nds after retries."
+          exit 1
+
   build:
     runs-on: ubuntu-latest
     steps:
