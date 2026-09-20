@@ -45,6 +45,16 @@ private:
         Remaining
     };
     void submitTerrainGroup(TerrainGroup group);
+#elif PLATFORM_DSI
+    // No native GX/VU handle and no display list: each entry just remembers
+    // which WorldRenderer/pass to ask for its already-captured RenderStaticMesh
+    // (see WorldRenderer::drawCapturedTerrain) when render() walks the list.
+    struct TerrainRenderEntry
+    {
+        WorldRenderer *renderer;
+        int_t pass;
+    };
+    std::vector<TerrainRenderEntry> terrainEntries;
 #endif
     bool initialized;
 };

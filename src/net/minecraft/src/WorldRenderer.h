@@ -52,8 +52,21 @@ public:
 	void callOcclusionQueryList();
 	int_t getGLCallListForPass(int_t pass);
 #endif
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(DSI_PLATFORM)
 	void renderExtraTerrainMeshes(int_t pass);
+#endif
+#ifdef DSI_PLATFORM
+	// Draws this section's already-captured terrain mesh for one pass (the
+	// generic RenderStaticMesh path -- see platform/RenderStaticMesh.cpp --
+	// since the DS 3D engine has neither OpenGL display lists nor a native
+	// terrain pipeline like Wii's GX one). Applies the same posXClip/Y/Z
+	// chunk-local translate PC bakes into its display list and Wii applies in
+	// renderExtraTerrainMeshes(); RenderList::render() (src/dsi/minecraft/
+	// RenderList.cpp) has already applied the coarser origin-to-viewer
+	// translate around every renderer in its batch, exactly as it does for PC
+	// and Wii. Returns false (and draws nothing) when the section is out of
+	// frustum, was never built, or this pass has no geometry.
+	bool drawCapturedTerrain(int_t pass);
 #endif
 #if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(DSI_PLATFORM) || PLATFORM_PC_LEGACY
 	bool isTerrainBuildInProgress() const;
@@ -218,7 +231,7 @@ private:
 	bool needsOcclusionBoxUpdate;
 	void updateOcclusionBox();
 #endif
-#if defined(WII_PLATFORM) || defined(PS2_PLATFORM)
+#if defined(WII_PLATFORM) || defined(PS2_PLATFORM) || defined(DSI_PLATFORM)
 	// OptiFine CTM atlases are kept as backend-neutral captured meshes. The
 	// normal terrain mesh remains on /terrain.png; these groups are replayed
 	// after it with their own texture binding.
@@ -333,6 +346,53 @@ private:
 	// as started in that case; it retries on a later frame.
 	bool ps2BeginBuildState();
 	bool ps2BuildRendererStep(int_t blockBudget);
+#endif
+#ifdef DSI_PLATFORM
+	// DSi terrain build state. Incremental like Wii's/PS2's (see
+	// PLATFORM_CHUNK_BUILD_BLOCKS_PER_STEP -- DsiWorldTuning.h/PlatformGameTuning.h
+	// deliberately fold DSi into PS2's per-frame chunk-build budget, not the
+	// desktop's single-shot one), but there is no native GX/VU/VRAM-handle path
+	// to publish into: the compiled mesh per pass is the generic captured-RAM
+	// RenderStaticMesh (platform/RenderStaticMesh.cpp), the same mechanism
+	// RenderGlobal already uses for the sky/star meshes. "Incremental" here
+	// means only "resumed across several updateRenderer() calls on the single
+	// main thread" -- src/dsi/compat's <thread>/<mutex> shims are not real
+	// threads, and nothing here spawns one; this is cooperative resumption
+	// exactly like WII_PLATFORM's build state below, not background work.
+	//
+	// dsiLiveMesh is what drawCapturedTerrain() replays every frame.
+	// dsiStagingMesh is compiled per pass as that pass's block loop finishes,
+	// but only swapped into dsiLiveMesh once BOTH passes of a build are done
+	// (see the end of dsiBuildRendererStep()), so a section either shows its
+	// old mesh whole or its new mesh whole -- never a mix of an updated pass 0
+	// against a stale pass 1.
+	RenderStaticMesh dsiLiveMesh[2];
+	RenderStaticMesh dsiStagingMesh[2];
+
+	std::vector<int_t> dsiBuildRawBuffer[2];
+	std::vector<TessellatorTextureMesh> dsiBuildExtraTextureMeshes[2];
+	int_t dsiBuildVertexCount[2];
+	bool dsiBuildHasTexture[2];
+	bool dsiBuildHasColor[2];
+	bool dsiBuildHasBrightness[2];
+	bool dsiBuildDrew[2];
+	bool dsiBuildActive;
+	// Snapshot of the ChunkCache source columns the active staging mesh was
+	// built against -- see the identical field on WII_PLATFORM above for why.
+	unsigned int dsiBuildSourceAvailability;
+	bool dsiBuildSourceAvailabilityValid;
+	int_t dsiBuildPass;
+	int_t dsiBuildCursor;
+	bool dsiBuildHasPass1;
+	bool dsiBuildChunkLit;
+	bool dsiBuildDirtyDuringBuild;
+	// See lastTerrainBuildStepDidWork().
+	bool dsiStepDidWork;
+	std::vector<TileEntity *> dsiBuildTileEntityRenderers;
+
+	void dsiResetBuildState();
+	void dsiBeginBuildState();
+	bool dsiBuildRendererStep(int_t blockBudget);
 #endif
 
 	static void eraseAllTileEntityRefs(std::vector<TileEntity *> *list, TileEntity *te);

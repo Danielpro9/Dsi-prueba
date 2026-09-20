@@ -184,6 +184,31 @@ WorldRenderer::WorldRenderer(World *world, std::vector<TileEntity *> *tileEntiti
 	ps2StepDidWork = false;
 	renderTerrainCacheReset(ps2TerrainCache);
 #endif
+#ifdef DSI_PLATFORM
+	// dsiLiveMesh/dsiStagingMesh are RenderStaticMesh, a plain struct with
+	// in-class member initializers (persistentHandle=0, persistentReady=false,
+	// an empty captured RenderCapturedMesh) -- default-constructed here is
+	// already the correct empty state, same as the sky/star RenderStaticMesh
+	// fields RenderGlobal default-constructs, so there is nothing to do for
+	// those two arrays beyond letting them default-construct.
+	for (int_t p = 0; p < 2; ++p)
+	{
+		dsiBuildVertexCount[p] = 0;
+		dsiBuildHasTexture[p] = false;
+		dsiBuildHasColor[p] = false;
+		dsiBuildHasBrightness[p] = false;
+		dsiBuildDrew[p] = false;
+	}
+	dsiBuildActive = false;
+	dsiBuildSourceAvailability = 0u;
+	dsiBuildSourceAvailabilityValid = false;
+	dsiBuildPass = 0;
+	dsiBuildCursor = 0;
+	dsiBuildHasPass1 = false;
+	dsiBuildChunkLit = false;
+	dsiBuildDirtyDuringBuild = false;
+	dsiStepDidWork = false;
+#endif
 }
 
 WorldRenderer::~WorldRenderer()
@@ -191,6 +216,12 @@ WorldRenderer::~WorldRenderer()
 	cleanup();
 #ifdef PS2_PLATFORM
 	renderTerrainCacheDestroy(ps2TerrainCache);
+#endif
+#ifdef DSI_PLATFORM
+	renderStaticMeshDestroy(dsiLiveMesh[0]);
+	renderStaticMeshDestroy(dsiLiveMesh[1]);
+	renderStaticMeshDestroy(dsiStagingMesh[0]);
+	renderStaticMeshDestroy(dsiStagingMesh[1]);
 #endif
 }
 
@@ -583,6 +614,21 @@ void WorldRenderer::markDirty()
 	renderTerrainChunkHandlesClearStaging(terrainChunkHandles);
 #endif
 #endif
+#ifdef DSI_PLATFORM
+#if PLATFORM_COALESCE_MESH_REBUILDS
+	if (dsiBuildActive)
+	{
+		const int_t chunkX = JavaArithmetic::intShr(posX, 4);
+		const int_t chunkZ = JavaArithmetic::intShr(posZ, 4);
+		if (worldObj != nullptr && worldObj->isChunkPopulationPendingForRendering(chunkX, chunkZ))
+			dsiBuildDirtyDuringBuild = true;
+		else
+			dsiResetBuildState();
+	}
+#else
+	dsiResetBuildState();
+#endif
+#endif
 	needsUpdate = true;
 }
 
@@ -609,6 +655,14 @@ void WorldRenderer::markDirtyFromLighting()
 	if (wiiBuildActive)
 	{
 		wiiBuildDirtyDuringBuild = true;
+		needsUpdate = true;
+		return;
+	}
+#endif
+#ifdef DSI_PLATFORM
+	if (dsiBuildActive)
+	{
+		dsiBuildDirtyDuringBuild = true;
 		needsUpdate = true;
 		return;
 	}
@@ -691,6 +745,18 @@ void WorldRenderer::setDontDraw()
 		platformProfileMeshReset(PlatformMeshResetReason::Recycle);
 #endif
 	ps2ResetBuildState();
+#endif
+#ifdef DSI_PLATFORM
+	// This renderer is about to be recycled to a different world position (or
+	// torn down). Unlike setPosition() alone moving a section a few blocks --
+	// where keeping the old mesh briefly visible would be nice -- there is no
+	// such case here: isInFrustum is cleared right below regardless, so the
+	// captured mesh's RAM (real memory, not a VRAM cache slot, but DSi's 12 MB
+	// total budget is tighter than either) is freed immediately rather than
+	// held until the next build's publish swap gets around to it.
+	renderStaticMeshDestroy(dsiLiveMesh[0]);
+	renderStaticMeshDestroy(dsiLiveMesh[1]);
+	dsiResetBuildState();
 #endif
 	isInFrustum = false;
 #if PLATFORM_PC || PLATFORM_PS2

@@ -1,0 +1,434 @@
+// WorldRenderer::updateRenderer() for DSi.
+//
+// The shared implementation in net/minecraft/src/WorldRenderer.cpp excludes
+// DSI_PLATFORM (see its own #if guard) because it records a chunk's mesh into
+// an OpenGL display list (renderBeginDisplayList/renderEndDisplayList), and
+// the DS 3D engine has no such concept -- RenderAPI_DSI.cpp does not, and
+// cannot, implement those two calls. src/wii/minecraft/WorldRendererWii.cpp
+// and src/ps2/minecraft/WorldRendererPs2.cpp are excluded from that same
+// function for an analogous reason (native GX display lists / VU0 packed
+// meshes), and each provides its own updateRenderer() instead. This file is
+// DSi's counterpart.
+//
+// Chosen mesh path: platform/RenderStaticMesh.cpp's generic captured-mesh
+// mechanism (RenderStaticMesh + renderStaticMeshCompile/Draw), the same one
+// RenderGlobal.cpp already uses for the sky/star meshes (skyMesh, skyMesh2,
+// starMesh) and GuiIngame.cpp uses for the hotbar/crosshair/status HUD
+// caches. It captures a Tessellator batch into a plain RenderCapturedMesh
+// (position/texcoord/color/brightness interleaved, exactly like Wii's
+// non-native fallback and PS2's own captured path) and replays it with
+// immediate-mode calls every frame -- see RenderAPI_DSI.cpp's
+// renderCaptureInterleaved()/renderDrawCaptured(). PLATFORM_PERSISTENT_RENDER_
+// MESH is PLATFORM_WII only (PlatformConfig.h), so on DSi renderStaticMeshCompile/
+// Draw always take that captured-replay branch, never a native persistent
+// handle -- there is no "DSi native terrain pipeline" to bypass here at all.
+//
+// Incremental build, not single-shot: DsiWorldTuning.h / PlatformGameTuning.h
+// fold DSi into PS2's per-frame chunk-build budget (PLATFORM_CHUNK_BUILD_
+// BLOCKS_PER_STEP, PLATFORM_CHUNK_BUILD_BUDGET_MS, PLATFORM_COALESCE_MESH_
+// REBUILDS, PLATFORM_MESH_BUDGET's scheduler in RenderGlobal::updateRenderers)
+// rather than the desktop/PC_LEGACY single-call one. "Incremental" here means
+// only "resumed across several updateRenderer() calls on the single main
+// thread", the same cooperative-resumption meaning WII_PLATFORM's build state
+// machine gives it below -- DSi genuinely has no working std::thread (see
+// src/dsi/compat's shims), and nothing in this build is a background job.
+// This file's structure mirrors src/wii/minecraft/WorldRendererWii.cpp
+// closely for that reason (the simpler of the two incremental builders --
+// PS2's also does greedy face merging and VU0 face-sorted publish, which are
+// GS/VU-specific optimisations this port does not attempt to reproduce on the
+// DS 3D engine).
+//
+// Deliberately NOT reproduced from PS2/Wii (documented simplifications, not
+// oversights):
+//   * Wii's WiiBlockRenderInfo / renderSimpleOpaqueCubeWii fast opaque-cube
+//     path, and PS2's greedy-meshing/VU0 face sort. Both are throughput
+//     optimisations layered on top of the same renderBlockByRenderType() this
+//     file calls for every block; correctness does not depend on them, and
+//     nothing about the DS 3D engine specifically needs them. PLATFORM_
+//     FAST_SIMPLE_CUBE_RENDER/PLATFORM_SKIP_ENCLOSED_OPAQUE_CUBES/PLATFORM_
+//     MESH_FACE_SORT are inherited from PS2's tuning table for DSi, but the
+//     generic RenderStaticMesh path this file uses has no per-face-direction
+//     replay to hand a face sort's output to (that is PLATFORM_NATIVE_
+//     TERRAIN_PIPELINE, Wii-only), so face sorting would only reorder vertices
+//     with no way to exploit the order at draw time. A real profile once this
+//     runs on hardware is what should decide whether the opaque fast-cube path
+//     is worth porting.
+//   * Wii's alpha-test-aware early-depth batching in RenderList (submitting
+//     opaque-and-not-alpha-tested sections before the rest so GX can reject
+//     fragments before texturing). src/dsi/minecraft/RenderList.cpp submits
+//     everything in one pass; it is a fill-rate optimisation, not a
+//     correctness requirement, and the DS 3D engine's fixed-function
+//     rasteriser/alpha-test path was not the part this port has verified yet.
+//   * PS2's shared terrain-staging pool (RenderTerrainStaging.h/
+//     Ps2MeshStagingPool). renderTerrainStagingHasFreeSlot() and friends
+//     already default to "no pool, always free" outside PLATFORM_PS2 (see
+//     RenderTerrainStaging.cpp), which is exactly Wii's behaviour too: each
+//     renderer owns its own staging buffers directly, as this file does.
+#ifdef DSI_PLATFORM
+
+#include "net/minecraft/src/WorldRenderer.h"
+#include "java/Arithmetic.h"
+
+#include "platform/RenderAPI.h"
+#include "platform/PlatformTuning.h"
+#include "platform/PlatformCompat.h"
+#include "net/minecraft/src/World.h"
+#include "net/minecraft/src/ConnectedTextures.h"
+#include "net/minecraft/src/Block.h"
+#include "net/minecraft/src/RenderBlocks.h"
+#include "net/minecraft/src/Tessellator.h"
+#include "net/minecraft/src/Chunk.h"
+#include "net/minecraft/src/ChunkCache.h"
+#include "net/minecraft/src/TileEntity.h"
+#include "net/minecraft/src/TileEntityRenderer.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <utility>
+
+namespace
+{
+	// How many source ChunkCache columns (of the up to 3x3 a section's 1-block
+	// margin can touch) this renderer will request per incremental step.
+	// PLATFORM_WII_RENDERER_DEPENDENCY_REQUESTS_PER_STEP is Wii's own tuned
+	// value (3); no PLATFORM_-generic equivalent exists (PS2's builder does not
+	// have this section at all -- see src/ps2/minecraft/WorldRendererPs2.cpp),
+	// so this follows PC_LEGACY_RENDERER_DEPENDENCY_REQUESTS_PER_STEP's lead
+	// (pc/tuning/PcLegacyTuning.h) and picks the most conservative value, 1:
+	// DSi's per-frame budget is the tightest of any platform this engine
+	// targets, and a missing chunk here does not block drawing (the section
+	// simply stays on its previous mesh and retries next step).
+	constexpr int_t kDsiRendererDependencyRequestsPerStep = 1;
+}
+
+void WorldRenderer::updateRenderer()
+{
+	if (!needsUpdate)
+		return;
+
+	dsiBuildRendererStep(PLATFORM_CHUNK_BUILD_BLOCKS_PER_STEP);
+}
+
+void WorldRenderer::dsiResetBuildState()
+{
+	dsiBuildActive = false;
+	dsiBuildSourceAvailability = 0u;
+	dsiBuildSourceAvailabilityValid = false;
+	dsiBuildPass = 0;
+	dsiBuildCursor = 0;
+	dsiBuildHasPass1 = false;
+	dsiBuildChunkLit = false;
+	dsiBuildDirtyDuringBuild = false;
+	dsiStepDidWork = false;
+	dsiBuildTileEntityRenderers.clear();
+	for (int_t p = 0; p < 2; ++p)
+	{
+		std::vector<int_t>().swap(dsiBuildRawBuffer[p]);
+		dsiBuildVertexCount[p] = 0;
+		dsiBuildHasTexture[p] = false;
+		dsiBuildHasColor[p] = false;
+		dsiBuildHasBrightness[p] = false;
+		dsiBuildDrew[p] = false;
+		dsiBuildExtraTextureMeshes[p].clear();
+		// A build being abandoned/restarted only ever has a half-finished
+		// staging mesh, never a published live one -- dsiLiveMesh is untouched
+		// here, exactly like Wii's terrainChunkHandlesClearStaging() leaves
+		// the live GX handles alone on a restart.
+		renderStaticMeshDestroy(dsiStagingMesh[p]);
+	}
+}
+
+void WorldRenderer::dsiBeginBuildState()
+{
+	dsiResetBuildState();
+	dsiBuildActive = true;
+}
+
+bool WorldRenderer::isTerrainBuildInProgress() const
+{
+	return dsiBuildActive;
+}
+
+bool WorldRenderer::lastTerrainBuildStepDidWork() const
+{
+	return dsiStepDidWork;
+}
+
+bool WorldRenderer::dsiBuildRendererStep(int_t blockBudget)
+{
+	dsiStepDidWork = false;
+	if (worldObj == nullptr)
+	{
+		dsiResetBuildState();
+		needsUpdate = false;
+		return true;
+	}
+
+	const int_t x0 = posX;
+	const int_t y0 = posY;
+	const int_t z0 = posZ;
+	const int_t x1 = posX + sizeWidth;
+	const int_t y1 = posY + sizeHeight;
+	const int_t z1 = posZ + sizeDepth;
+
+	// Do not bake temporary air into a partial mesh. Snapshot every source
+	// column ChunkCache can sample so a streamed neighbour appearing or
+	// disappearing between two bounded steps restarts only this staging mesh
+	// instead of mixing two source states -- see the identical comment on
+	// WII_PLATFORM's wiiBuildRendererStep() this mirrors.
+	unsigned int sourceAvailability = 0u;
+	{
+		const int_t ccx0 = JavaArithmetic::intShr(x0 - 1, 4);
+		const int_t ccx1 = JavaArithmetic::intShr(x1 + 1, 4);
+		const int_t ccz0 = JavaArithmetic::intShr(z0 - 1, 4);
+		const int_t ccz1 = JavaArithmetic::intShr(z1 + 1, 4);
+		unsigned int sourceBit = 1u;
+		for (int_t ccx = ccx0; ccx <= ccx1; ++ccx)
+		{
+			for (int_t ccz = ccz0; ccz <= ccz1; ++ccz, sourceBit <<= 1)
+			{
+				if (worldObj->chunkExists(ccx, ccz))
+					sourceAvailability |= sourceBit;
+			}
+		}
+
+		if (dsiBuildSourceAvailabilityValid &&
+			dsiBuildSourceAvailability != sourceAvailability)
+		{
+			dsiBeginBuildState();
+			dsiBuildSourceAvailability = sourceAvailability;
+			dsiBuildSourceAvailabilityValid = true;
+			return false;
+		}
+
+		int_t requestedDependencies = 0;
+		sourceBit = 1u;
+		for (int_t ccx = ccx0; ccx <= ccx1; ++ccx)
+		{
+			for (int_t ccz = ccz0; ccz <= ccz1; ++ccz, sourceBit <<= 1)
+			{
+				if ((sourceAvailability & sourceBit) != 0u ||
+					!worldObj->isChunkInLoadRadius(ccx, ccz))
+					continue;
+
+				worldObj->getChunkFromChunkCoords(ccx, ccz);
+				++requestedDependencies;
+				if (requestedDependencies >= kDsiRendererDependencyRequestsPerStep)
+					return false;
+			}
+		}
+		if (requestedDependencies > 0)
+			return false;
+	}
+
+	if (!dsiBuildActive)
+	{
+		dsiBeginBuildState();
+		dsiBuildSourceAvailability = sourceAvailability;
+		dsiBuildSourceAvailabilityValid = true;
+	}
+
+	const int_t totalBlocks = sizeWidth * sizeHeight * sizeDepth;
+	if (blockBudget <= 0)
+		blockBudget = totalBlocks;
+
+	const uint64_t stepStartUs = PlatformCompat::getMonotonicMicros();
+	int_t processed = 0;
+
+	while (dsiBuildPass < 2)
+	{
+		if (dsiBuildPass == 1 && !dsiBuildHasPass1)
+		{
+			dsiBuildPass = 2;
+			dsiBuildCursor = 0;
+			break;
+		}
+
+		Chunk::isLit = false;
+		ChunkCache chunkcache(worldObj, x0 - 1, y0 - 1, z0 - 1, x1 + 1, y1 + 1, z1 + 1);
+		RenderBlocks renderblocks(&chunkcache);
+		Tessellator *tessellator = &Tessellator::instance;
+		tessellator->startDrawingQuads();
+		tessellator->setTranslationD(-(double)posX, -(double)posY, -(double)posZ);
+
+		bool stepDrew = false;
+		while (dsiBuildCursor < totalBlocks && processed < blockBudget)
+		{
+			const int_t cursor = dsiBuildCursor++;
+			const int_t lx = cursor % sizeWidth;
+			const int_t yz = cursor / sizeWidth;
+			const int_t lz = yz % sizeDepth;
+			const int_t ly = yz / sizeDepth;
+			const int_t x = x0 + lx;
+			const int_t y = y0 + ly;
+			const int_t z = z0 + lz;
+			++processed;
+
+			const int_t id = chunkcache.getBlockId(x, y, z);
+			if (id > 0)
+			{
+				if (dsiBuildPass == 0 && Block::isBlockContainer[id])
+				{
+					TileEntity *te = chunkcache.getBlockTileEntity(x, y, z);
+					if (te != nullptr && TileEntityRenderer::instance.hasSpecialRenderer(te) &&
+						std::find(dsiBuildTileEntityRenderers.begin(), dsiBuildTileEntityRenderers.end(), te) == dsiBuildTileEntityRenderers.end())
+						dsiBuildTileEntityRenderers.push_back(te);
+				}
+
+				Block *block = Block::blocksList[id];
+				if (block == nullptr)
+					continue;
+
+				const int_t blockPass = block->getRenderBlockPass();
+				if (dsiBuildPass == 0 && blockPass != 0)
+					dsiBuildHasPass1 = true;
+				if (blockPass != dsiBuildPass)
+					continue;
+
+				stepDrew |= renderblocks.renderBlockByRenderType(block, x, y, z);
+			}
+
+			if ((processed & 15) == 0 && PLATFORM_CHUNK_BUILD_STEP_US > 0)
+			{
+				const uint64_t nowUs = PlatformCompat::getMonotonicMicros();
+				if (nowUs > stepStartUs && nowUs - stepStartUs >= (uint64_t)PLATFORM_CHUNK_BUILD_STEP_US)
+					break;
+			}
+		}
+
+		tessellator->captureTextureGroups(dsiBuildExtraTextureMeshes[dsiBuildPass], true);
+		dsiBuildDrew[dsiBuildPass] = dsiBuildDrew[dsiBuildPass] || stepDrew;
+
+		static RenderCapturedMesh stepMesh;
+		stepMesh.clear();
+		if (tessellator->capture(stepMesh))
+		{
+			dsiBuildRawBuffer[dsiBuildPass].insert(dsiBuildRawBuffer[dsiBuildPass].end(),
+				stepMesh.raw.begin(), stepMesh.raw.end());
+			dsiBuildVertexCount[dsiBuildPass] += stepMesh.vertexCount;
+			dsiBuildHasTexture[dsiBuildPass] |= stepMesh.hasTexture;
+			dsiBuildHasColor[dsiBuildPass] |= stepMesh.hasColor;
+			dsiBuildHasBrightness[dsiBuildPass] |= stepMesh.hasBrightness;
+		}
+		tessellator->setTranslationD(0.0, 0.0, 0.0);
+		dsiBuildChunkLit |= Chunk::isLit;
+		dsiStepDidWork |= processed > 0;
+
+		if (dsiBuildCursor < totalBlocks)
+			return false;
+
+		// This pass's whole block loop is done: compile whatever it emitted
+		// into the DSi captured-mesh backend (RenderStaticMesh, generic --
+		// see the file banner). Not published to dsiLiveMesh yet: that only
+		// happens once BOTH passes finish, below, so a section never shows an
+		// updated pass 0 next to a stale pass 1.
+		if (dsiBuildVertexCount[dsiBuildPass] > 0 && !dsiBuildRawBuffer[dsiBuildPass].empty())
+		{
+			const RenderPrimitive primitive = Tessellator::convertQuadsToTriangles
+				? RenderPrimitive::Triangles : RenderPrimitive::Quads;
+
+			RenderInterleavedMesh mesh;
+			mesh.data = dsiBuildRawBuffer[dsiBuildPass].data();
+			mesh.stride = 32;
+			mesh.count = dsiBuildVertexCount[dsiBuildPass];
+			mesh.primitive = primitive;
+			mesh.hasTexture = dsiBuildHasTexture[dsiBuildPass];
+			mesh.texCoordOffset = 12;
+			mesh.hasColor = dsiBuildHasColor[dsiBuildPass];
+			mesh.colorOffset = 20;
+			mesh.hasBrightness = dsiBuildHasBrightness[dsiBuildPass];
+			mesh.brightnessOffset = 28;
+			renderStaticMeshCompile(dsiStagingMesh[dsiBuildPass], mesh);
+		}
+		else
+		{
+			renderStaticMeshDestroy(dsiStagingMesh[dsiBuildPass]);
+		}
+
+		std::vector<int_t>().swap(dsiBuildRawBuffer[dsiBuildPass]);
+		dsiBuildPass++;
+		dsiBuildCursor = 0;
+		if (processed >= blockBudget)
+			return false;
+		if (PLATFORM_CHUNK_BUILD_STEP_US > 0)
+		{
+			const uint64_t nowUs = PlatformCompat::getMonotonicMicros();
+			if (nowUs > stepStartUs && nowUs - stepStartUs >= (uint64_t)PLATFORM_CHUNK_BUILD_STEP_US)
+				return false;
+		}
+	}
+
+	// Linear scans instead of hash sets -- see the PS2/Wii build paths in
+	// net/minecraft/src/WorldRenderer.cpp for why (small lists, called rarely
+	// relative to the per-block loop above).
+	for (TileEntity *te : dsiBuildTileEntityRenderers)
+	{
+		if (std::find(tileEntityRenderers.begin(), tileEntityRenderers.end(), te) == tileEntityRenderers.end())
+			pushUniqueTileEntityRef(tileEntities, te);
+	}
+	for (TileEntity *te : tileEntityRenderers)
+	{
+		if (std::find(dsiBuildTileEntityRenderers.begin(), dsiBuildTileEntityRenderers.end(), te) == dsiBuildTileEntityRenderers.end())
+			eraseAllTileEntityRefs(tileEntities, te);
+	}
+
+	// Publish: swap each pass's freshly compiled staging mesh into the live
+	// slot drawCapturedTerrain() reads, then free what used to be live (now
+	// sitting in the staging slot after the swap). Both passes swap together,
+	// here, after the loop above has finished both -- never one at a time.
+	for (int_t p = 0; p < 2; ++p)
+	{
+		std::swap(dsiLiveMesh[p], dsiStagingMesh[p]);
+		renderStaticMeshDestroy(dsiStagingMesh[p]);
+		extraTextureMeshes[p].swap(dsiBuildExtraTextureMeshes[p]);
+		dsiBuildExtraTextureMeshes[p].clear();
+		_skipRenderPass[p] = !(dsiBuildDrew[p] &&
+			(dsiBuildVertexCount[p] > 0 || !extraTextureMeshes[p].empty()));
+	}
+	tileEntityRenderers = dsiBuildTileEntityRenderers;
+	const bool dirtyDuringBuild = dsiBuildDirtyDuringBuild;
+	isChunkLit = dsiBuildChunkLit;
+	isInitialized = true;
+	needsUpdate = dirtyDuringBuild;
+	chunksUpdated++;
+	dsiResetBuildState();
+	return true;
+}
+
+void WorldRenderer::renderExtraTerrainMeshes(int_t pass)
+{
+	if (pass < 0 || pass > 1 || _skipRenderPass[pass] || extraTextureMeshes[pass].empty())
+		return;
+
+	renderPushMatrix();
+	// RenderList already applied the coarser origin-bucket-to-viewer
+	// translate; captured CTM vertices are section-local (Tessellator's
+	// setTranslationD(-posX,-posY,-posZ) during the build), so this adds the
+	// same clip-origin translate drawCapturedTerrain() uses for the main mesh.
+	renderTranslate((float)posXClip, (float)posYClip, (float)posZClip);
+	for (const TessellatorTextureMesh &group : extraTextureMeshes[pass])
+	{
+		renderBindTexture(group.textureId);
+		(void)renderDrawCaptured(group.mesh);
+	}
+	renderPopMatrix();
+
+	// Terrain state assumes /terrain.png is still bound after each section.
+	renderBindTexture(ConnectedTextures::getTerrainTextureId());
+}
+
+bool WorldRenderer::drawCapturedTerrain(int_t pass)
+{
+	if (pass < 0 || pass > 1)
+		return false;
+	if (!isInFrustum || !isInitialized || _skipRenderPass[pass])
+		return false;
+
+	renderPushMatrix();
+	renderTranslate((float)posXClip, (float)posYClip, (float)posZClip);
+	const bool drew = renderStaticMeshDraw(dsiLiveMesh[pass]);
+	renderPopMatrix();
+	return drew;
+}
+
+#endif // DSI_PLATFORM

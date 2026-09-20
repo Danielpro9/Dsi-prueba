@@ -347,31 +347,16 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 
 } // namespace
 
-void renderStaticMeshCreate(RenderStaticMesh& mesh)
-{
-	mesh.persistentHandle = 0;
-	mesh.persistentReady = false;
-	mesh.captured.clear();
-}
-
-void renderStaticMeshDestroy(RenderStaticMesh& mesh)
-{
-	mesh.captured.clear();
-	mesh.persistentReady = false;
-}
-
-bool renderStaticMeshCompile(RenderStaticMesh& mesh, const RenderInterleavedMesh& source)
-{
-	// PLATFORM_MODEL_PERSISTENT_MESH is 0 for DSi (see PlatformConfig.h), so
-	// this always takes the captured-replay path, never a native handle.
-	mesh.persistentReady = false;
-	return renderCaptureInterleaved(source, mesh.captured, false);
-}
-
-bool renderStaticMeshDraw(const RenderStaticMesh& mesh)
-{
-	return renderDrawCaptured(mesh.captured);
-}
+// renderStaticMeshCreate/Destroy/Compile/Draw are NOT defined here: they are
+// the generic platform/RenderStaticMesh.cpp implementation (shared by every
+// backend that doesn't set PLATFORM_PERSISTENT_RENDER_MESH -- DSi doesn't;
+// see PlatformConfig.h). platform/RenderStaticMesh.cpp is compiled
+// unconditionally by Makefile.game's SOURCEDIRS (it has no per-backend
+// filename suffix, so the RenderAPI_(PC|GL|GX_WII|GS_PS2).cpp exclusion
+// grep never touches it). Defining them again here previously duplicated
+// those four symbols and would fail at link time with a multiple-definition
+// error against RenderStaticMesh.cpp's copies -- removed rather than kept as
+// a second, coincidentally-identical implementation.
 
 bool renderDrawInterleaved(const RenderInterleavedMesh& mesh)
 {
