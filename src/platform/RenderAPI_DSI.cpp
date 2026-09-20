@@ -161,10 +161,25 @@ void convertRgba8ToDs(const std::uint8_t* src, std::uint16_t* dst, int pixelCoun
 	}
 }
 
-void uploadTexture(int name, const DsiTexture& tex)
+// Returns whether the DS GPU actually accepted this texture. glTexImage2D()
+// (really glTexImageNtr2D(), see nds/arm9/videoGL.h) requires each dimension
+// to be an EXACT power of two from 8 to 1024 and returns 0 -- uploading
+// nothing -- for anything else (also on VRAM exhaustion). That return value
+// used to be discarded here, so a real-hardware asset with, say, a
+// non-power-of-two panorama.png silently uploaded nothing while every CPU-
+// side book-keeping struct (DsiTexture::allocated, renderTextureIsValid())
+// still reported success: the polygon still drew, just textureless, at
+// whatever flat vertex colour the caller set -- solid white for
+// LegacyPanorama.cpp's renderColor4f(1,1,1,1). Checking it here lets
+// renderTextureImageRgba() report the failure truthfully, so RenderEngine.cpp's
+// existing missing-texture fallback (the black/white checkerboard,
+// createMissingTexture()) actually engages the way it already does for a
+// texture that fails to *decode* -- a recognisable placeholder instead of an
+// invisible, silent failure.
+bool uploadTexture(int name, const DsiTexture& tex)
 {
 	if (tex.width <= 0 || tex.height <= 0 || tex.rgba.empty())
-		return;
+		return false;
 
 	std::vector<std::uint16_t> converted(static_cast<std::size_t>(tex.width) * tex.height);
 	convertRgba8ToDs(tex.rgba.data(), converted.data(), tex.width * tex.height);
@@ -174,8 +189,9 @@ void uploadTexture(int name, const DsiTexture& tex)
 		param |= GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T;
 
 	glBindTexture(0, name);
-	glTexImage2D(0, 0, GL_RGBA, tex.width, tex.height, 0, param, converted.data());
+	const int uploaded = glTexImage2D(0, 0, GL_RGBA, tex.width, tex.height, 0, param, converted.data());
 	glTexParameter(0, param); // wrap bits already set above; kept for parity with callers that only touch params later
+	return uploaded != 0;
 }
 
 // -----------------------------------------------------------------------------
@@ -670,7 +686,10 @@ void renderTextureSubImageRgba(int level, int x, int y, int width, int height, c
 		std::uint8_t* dstRow = tex->rgba.data() + ((std::size_t)(y + row) * tex->width + x) * 4;
 		std::memcpy(dstRow, srcRow, (std::size_t)width * 4);
 	}
-	uploadTexture(g_boundTexture, *tex);
+	// Same dimensions as the already-successful initial upload, so this can't
+	// newly fail the power-of-two check -- but propagate honestly anyway
+	// rather than assume, in case VRAM pressure is what fails it this time.
+	tex->allocated = uploadTexture(g_boundTexture, *tex);
 }
 
 void renderTextureImageRgba(int level, int width, int height, const void* pixels)
@@ -684,10 +703,15 @@ void renderTextureImageRgba(int level, int width, int height, const void* pixels
 
 	tex->width = width;
 	tex->height = height;
-	tex->allocated = true;
 	tex->rgba.assign(static_cast<const std::uint8_t*>(pixels),
 	                  static_cast<const std::uint8_t*>(pixels) + (std::size_t)width * height * 4);
-	uploadTexture(g_boundTexture, *tex);
+	// See uploadTexture()'s own comment: a real hardware upload can fail
+	// (most likely a non-power-of-two source image) where the old code here
+	// always reported success. renderTextureIsValid() reads this flag, and
+	// RenderEngine.cpp's caller treats "invalid" the same as "failed to
+	// decode" -- binding the checkerboard placeholder instead of leaving a
+	// textureless polygon at its flat vertex colour.
+	tex->allocated = uploadTexture(g_boundTexture, *tex);
 }
 
 void renderTextureParameters(bool blur, bool, bool clamp)
@@ -697,7 +721,7 @@ void renderTextureParameters(bool blur, bool, bool clamp)
 		tex->blur = blur;
 		tex->clamp = clamp;
 		if (tex->allocated)
-			uploadTexture(g_boundTexture, *tex);
+			tex->allocated = uploadTexture(g_boundTexture, *tex);
 	}
 }
 

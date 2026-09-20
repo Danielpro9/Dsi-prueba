@@ -47,6 +47,16 @@ bool legacyDrawPanorama(Minecraft *mc, int_t screenWidth, int_t screenHeight,
 
     drawPanoramaQuad(screenWidth, screenHeight, zLevel, uv, 0.0f, 0.0f, 1.0f);
 
+#ifndef DSI_PLATFORM
+    // Requested directly after a real-hardware report of severe main-menu
+    // lag on DSi (many D-pad/A presses needed before anything registered).
+    // This is a real, named "blur": 4 extra full-screen alpha-blended
+    // draws every frame (9 on PS2, see the diagonal block below), purely
+    // to soften the background image. Translucent-polygon rendering is one
+    // of the more expensive, easier-to-misconfigure paths on the DS's
+    // fixed-function GPU (see RenderAPI_DSI.cpp's POLY_ALPHA/blending
+    // notes), so skip it here entirely rather than tune the sample count --
+    // DSi gets just the single opaque base draw above.
     const float_t texelU = 1.0f / static_cast<float_t>(textureWidth);
     const float_t texelV = 1.0f / static_cast<float_t>(textureHeight);
     const float_t blurAlpha = 0.18f;
@@ -54,6 +64,7 @@ bool legacyDrawPanorama(Minecraft *mc, int_t screenWidth, int_t screenHeight,
     drawPanoramaQuad(screenWidth, screenHeight, zLevel, uv, texelU, 0.0f, blurAlpha);
     drawPanoramaQuad(screenWidth, screenHeight, zLevel, uv, 0.0f, -texelV, blurAlpha);
     drawPanoramaQuad(screenWidth, screenHeight, zLevel, uv, 0.0f, texelV, blurAlpha);
+#endif
 #ifdef PS2_PLATFORM
     // The start menu can afford four extra taps, and the diagonal samples make
     // the bilinear result read as a blur instead of a one-axis softening.

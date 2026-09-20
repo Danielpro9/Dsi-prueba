@@ -65,7 +65,20 @@ void releaseWorldEntryAssets(RenderEngine*)
 
 int panoramaSampleGrid()
 {
-	return 2; // Same reduced grid PS2 uses: less texture memory for the menu background.
+	// 1: a single, unblurred draw per cube face (6 quads/frame total), not
+	// PS2's already-reduced 2x2 grid (24 quads/frame). Requested directly
+	// after a real-hardware report of severe main-menu lag (menu barely
+	// responding to input) -- the sampleGrid loop in GuiMainMenu.cpp's
+	// drawPanorama() is a deliberate motion-blur-style effect: N*N samples
+	// per face, each a separate alpha-blended draw, stacked to fake a soft
+	// trail as the cube rotates. Translucent-polygon rendering is one of
+	// the more expensive, easier-to-misconfigure paths on the DS's fixed-
+	// function GPU (see RenderAPI_DSI.cpp's own POLY_ALPHA/blending notes),
+	// so 24 blended draws a frame just for the background -- before the
+	// menu buttons, text, or anything else -- is a real, plausible cost on
+	// this hardware, not just PS2's GS. Dropping to a single opaque draw
+	// per face removes both the blend stacking AND 18 of the 24 draws.
+	return 1;
 }
 
 void reportCrash(const std::string& description)
