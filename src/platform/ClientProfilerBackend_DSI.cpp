@@ -43,9 +43,19 @@ void frameEnd(long long frameNs, long long tickNs, long long renderNs,
 
 	// currentTimeMillis()-style windowing lives in java/System.h, which pulls
 	// in more of the shared engine than this minimal placeholder needs; a
-	// frame count is a fine enough proxy for "log roughly every 10 seconds"
-	// at any frame rate this port will plausibly hit.
-	if (g_dsi.frames < 300)
+	// frame count is a fine enough proxy for "log roughly every N seconds".
+	//
+	// 300 here assumed something close to the intended 20-60fps -- at 300
+	// frames that is a ~5-15s window, reasonable. Real-hardware reports put
+	// the actual main-menu rate closer to 1 frame per ~3 SECONDS (not ms),
+	// which is why no dsi.perf line has ever shown up in a debug.log despite
+	// several rounds of fixes attempted blind without one: at that rate 300
+	// frames is a ~15-MINUTE wait, far longer than anyone has left the menu
+	// idle for one test. Dropped to 20 so this reports in well under a
+	// minute even at the reported worst case, trading window smoothness
+	// (a shorter average is noisier) for actually getting a tick-vs-render
+	// breakdown out of a real test instead of guessing further blind.
+	if (g_dsi.frames < 20)
 		return;
 
 	MC_LOG_INFO("dsi.perf", "frames=%d frame=%ld/%ldms tick=%ld/%ldms render=%ld/%ldms\n",
