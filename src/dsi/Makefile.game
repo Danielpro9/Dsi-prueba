@@ -74,7 +74,13 @@ ROM		:= $(NAME).nds
 # configure_file() would produce for these two values. Generated into our
 # own build/ dir, same as CMake would, rather than the submodule's checked-
 # out source tree.
-$(shell $(MKDIR) -p $(BUILDDIR)/zconf && sed \
+# Not $(MKDIR): that variable (like $(CC)/$(CXX)) isn't assigned until
+# further down this file, and $(shell ...) runs immediately at this point
+# while the makefile is still being read, so it would have expanded to
+# nothing here -- silently turning this into a no-op that left later
+# compiles unable to find the generated zconf.h at all (confirmed against
+# the real BlocksDS toolchain in CI: "zconf.h: No such file or directory").
+$(shell mkdir -p $(BUILDDIR)/zconf && sed \
 	-e 's/#cmakedefine Z_PREFIX/\/* #undef Z_PREFIX *\//' \
 	-e 's/#cmakedefine Z_HAVE_UNISTD_H/#define Z_HAVE_UNISTD_H/' \
 	../../external/zlib/zconf.h.cmakein > $(BUILDDIR)/zconf/zconf.h)
