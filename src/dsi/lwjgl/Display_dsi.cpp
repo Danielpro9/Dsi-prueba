@@ -18,11 +18,32 @@
 #include <nds.h>
 
 #include "dsi/DsiEarlyInit.h"
+#include "platform/Log.h"
 
 namespace
 {
 bool g_created = false;
 bool g_closeRequested = false;
+
+// No debugger and no serial console on real hardware, and a hang leaves
+// nothing else on screen to say the game is still alive -- the difference
+// between "drawing the same frame forever" and "stuck in an infinite loop
+// with vblank never reached again" is otherwise invisible from outside the
+// console. This writes one line to sd:/OptiCraft/debug.log (see
+// DsiEarlyStorage.cpp) roughly once a second; if that line stops advancing,
+// whatever ran between it and the next one is where things stopped. Cheap
+// enough to leave on permanently: MC_LOG_SYNC_WRITES commits it immediately
+// either way (see Log.h), so this adds one open/write/flush per ~60 frames,
+// not per frame.
+void heartbeat()
+{
+	static unsigned int frame = 0;
+	++frame;
+	if (frame % 60 != 0)
+		return;
+	MC_LOG_INFO("dsi", "heartbeat frame=%u heap=%u/%uKB\n",
+		frame, (unsigned)(dsiGetHeapCommitted() / 1024u), (unsigned)(dsiGetHeapCeiling() / 1024u));
+}
 }
 
 namespace lwjgl
@@ -70,6 +91,7 @@ void processMessages()
 void swapBuffers()
 {
 	glFlush(0); // waits for vblank and swaps
+	heartbeat();
 }
 
 void update(bool doProcessMessages)

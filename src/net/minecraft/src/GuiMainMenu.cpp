@@ -250,7 +250,19 @@ void GuiMainMenu::initGui()
     viewportTexture = -1;
     legacyPanoramaAvailable = mc->gameSettings != nullptr && mc->gameSettings->legacyUI &&
         mc->renderEngine != nullptr && mc->renderEngine->hasResource(legacyPanoramaResourcePath());
-#if !PLATFORM_PS2 && !PLATFORM_WII
+    // DSi excluded alongside PS2/WII: RenderAPI_DSI's
+    // renderCopyFramebufferToBoundTexture() always returns false (no
+    // framebuffer-to-texture copy path implemented on this backend), so
+    // renderSkybox()'s blur attempt below can never succeed on DSi. Leaving
+    // viewportTexture >= 0 here would make renderSkybox() draw the full
+    // panorama once into it, discover the copy failed, then draw the whole
+    // panorama a second time as the real fallback -- twice the vertex/texture
+    // work every frame the main menu is on screen, for a blur that never
+    // renders. Keeping viewportTexture == -1 short-circuits straight to the
+    // single-draw fallback instead, and skips allocating a 256x256 texture
+    // (256KB of the 12MB heap, see DsiEarlyMemory.cpp) that would otherwise
+    // sit unused for the same reason.
+#if !PLATFORM_PS2 && !PLATFORM_WII && !PLATFORM_DSI
     if (!legacyPanoramaAvailable)
     {
         BufferedImage viewportImage(256, 256);

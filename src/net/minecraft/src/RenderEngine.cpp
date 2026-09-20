@@ -564,9 +564,33 @@ int_t RenderEngine::getTexture(const std::string &s)
 				platformProfileRenderPhaseBegin() - textureRetryStart);
 #endif
 			if (retryLoaded)
+			{
 				failedTextures.erase(failedIt);
+#ifdef DSI_PLATFORM
+				dsiTextureRetryAttempts.erase(s);
+#endif
+			}
 			else
-				failedIt->second = TEXTURE_RETRY_INTERVAL;
+			{
+#ifdef DSI_PLATFORM
+				if (++dsiTextureRetryAttempts[s] >= DSI_TEXTURE_MAX_RETRIES)
+				{
+					// Give up on this name for good: leave the checkerboard
+					// bound and stop re-touching VRAM/the SD card for it
+					// every TEXTURE_RETRY_INTERVAL frames. INT32_MAX rather
+					// than erasing the entry: erasing would make the next
+					// getTexture() call for this name treat it as never-
+					// attempted and re-run the whole first-load path (a
+					// fresh glGenTextures + upload) instead of just reusing
+					// the checkerboard already bound in textureMap.
+					failedIt->second = 0x7fffffff;
+					MC_LOG_WARN("dsi", "texture '%s' failed %d times, giving up (checkerboard stays)\n",
+						s.c_str(), (int)DSI_TEXTURE_MAX_RETRIES);
+				}
+				else
+#endif
+					failedIt->second = TEXTURE_RETRY_INTERVAL;
+			}
 		}
 #if PLATFORM_PS2 && MC_LOG_LEVEL > 2
 		if (!retriedLoad)

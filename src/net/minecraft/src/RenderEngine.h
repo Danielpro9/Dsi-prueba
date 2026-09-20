@@ -110,6 +110,26 @@ private:
 	// Keys in textureMap whose image failed to load, mapped to the countdown
 	// until the next retry attempt. See TEXTURE_RETRY_INTERVAL.
 	std::map<std::string, int_t> failedTextures;
+#ifdef DSI_PLATFORM
+	// How many times each key in failedTextures has been retried. DSi has no
+	// removable-media-reconnect story (unlike PS2's Memory Card/USB or a PC
+	// resource pack swapped mid-game) -- a texture missing here means the SD
+	// card's assets folder is missing or incomplete, which retrying will
+	// never fix. See DSI_TEXTURE_MAX_RETRIES's own comment for what capping
+	// this avoids.
+	std::map<std::string, int_t> dsiTextureRetryAttempts;
+	// After this many failed retries, getTexture() stops retrying that name
+	// for the rest of the run (see the DSI_PLATFORM branch in getTexture()).
+	// Every retry re-touches VRAM (a real glTexImage2D upload of the
+	// checkerboard placeholder, not a no-op) and re-opens the SD card file to
+	// find it missing again; with every menu texture failing at once (no
+	// assets installed), that repeats for ~10+ distinct names every
+	// TEXTURE_RETRY_INTERVAL frames, forever, for as long as the menu is on
+	// screen -- the only mechanism in the whole boot-to-menu path that both
+	// runs unbounded and touches limited hardware resources on every
+	// repetition.
+	static constexpr int_t DSI_TEXTURE_MAX_RETRIES = 3;
+#endif
 	std::map<std::string, std::vector<int_t>> field_28151_c;
 	std::map<int_t, std::shared_ptr<BufferedImage>> textureNameToImageMap;
 	std::map<int_t, bool> textureHighPrecision;

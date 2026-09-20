@@ -151,7 +151,22 @@ SOURCES_CPP	+= main_dsi.cpp
 # is what already flips the existing PLATFORM_LOCAL_RESOURCES_ONLY knob (see
 # PlatformConfig.h) so ThreadDownloadResources scans resources synchronously
 # instead of spinning up a std::thread this toolchain cannot actually run.
-DEFINES		+= -D__NDS__ -D__BLOCKSDS__ -DARM9 -DNO_SOUND -DNO_NETWORK
+#
+# MC_LOG_LEVEL=1: on real hardware there is no debugger and no serial console
+# -- platform/Log.h's McLog already writes to sd:/OptiCraft/debug.log
+# (DsiEarlyStorage.cpp calls openSessionFile(), MC_LOG_SYNC_WRITES=1 for
+# PLATFORM_DSI commits every line immediately so a hang leaves the log naming
+# the last thing that ran, not an empty buffer), but MC_LOG_LEVEL defaults to
+# 0 (silent, see Log.h) when nothing defines it -- meaning every MC_LOG_INFO/
+# DEBUG call up to now was compiled out and debug.log was empty even though
+# it existed. Level 1 (info/warning/error + boot milestones + the
+# Display_dsi.cpp heartbeat), not 2: level 2 turns on every MC_LOG_DEBUG
+# frame-diagnostic call across the whole shared engine, and with
+# MC_LOG_SYNC_WRITES committing each line to the SD card immediately, that
+# volume could by itself slow the game down enough to look like a hang --
+# exactly the ambiguity this exists to remove. Revisit once level 1's output
+# says which area needs level-2 detail.
+DEFINES		+= -D__NDS__ -D__BLOCKSDS__ -DARM9 -DNO_SOUND -DNO_NETWORK -DMC_LOG_LEVEL=1
 
 ARCH		:= -mthumb -mcpu=arm946e-s+nofp
 
