@@ -54,6 +54,54 @@ namespace
 {
 Random g_mainMenuRand;
 
+#if PLATFORM_DSI
+// Real-hardware data (ClientProfilerBackend_DSI.cpp's [dsi.perf] line) isolated
+// the entire per-frame cost to EntityRenderer::updateCameraAndRender(), and
+// several targeted fixes inside RenderAPI_DSI.cpp (VRAM reupload, O(1) alpha
+// sample, div->mul) made no measurable difference -- meaning the actual cost
+// is somewhere else in the call chain this function doesn't cover, most
+// likely inside this screen's own drawScreen(). Rather than keep guessing
+// blind, split drawScreen() itself into named sections the same way
+// ClientProfilerBackend_DSI.cpp already reports frame/tick/render: accumulate
+// nanoTime() deltas per section and log one averaged line every 20 calls
+// (same window, same reasoning -- see that file's comment on why 300 was
+// too slow to ever fire).
+struct DsiMenuTimingWindow
+{
+    long_t background = 0, maxBackground = 0;
+    long_t title = 0, maxTitle = 0;
+    long_t splash = 0, maxSplash = 0;
+    long_t hints = 0, maxHints = 0;
+    long_t buttons = 0, maxButtons = 0;
+    long_t hud = 0, maxHud = 0;
+    int calls = 0;
+} g_dsiMenuTiming;
+
+void dsiMenuTimingAccumulate(long_t& total, long_t& maxTotal, long_t sampleNs)
+{
+    total += sampleNs;
+    if (sampleNs > maxTotal)
+        maxTotal = sampleNs;
+}
+
+void dsiMenuTimingReport()
+{
+    if (++g_dsiMenuTiming.calls < 20)
+        return;
+
+    MC_LOG_INFO("dsi.perf",
+        "menu bg=%ld/%ldms title=%ld/%ldms splash=%ld/%ldms hints=%ld/%ldms buttons=%ld/%ldms hud=%ld/%ldms\n",
+        (long)(g_dsiMenuTiming.background / g_dsiMenuTiming.calls / 1000000LL), (long)(g_dsiMenuTiming.maxBackground / 1000000LL),
+        (long)(g_dsiMenuTiming.title / g_dsiMenuTiming.calls / 1000000LL), (long)(g_dsiMenuTiming.maxTitle / 1000000LL),
+        (long)(g_dsiMenuTiming.splash / g_dsiMenuTiming.calls / 1000000LL), (long)(g_dsiMenuTiming.maxSplash / 1000000LL),
+        (long)(g_dsiMenuTiming.hints / g_dsiMenuTiming.calls / 1000000LL), (long)(g_dsiMenuTiming.maxHints / 1000000LL),
+        (long)(g_dsiMenuTiming.buttons / g_dsiMenuTiming.calls / 1000000LL), (long)(g_dsiMenuTiming.maxButtons / 1000000LL),
+        (long)(g_dsiMenuTiming.hud / g_dsiMenuTiming.calls / 1000000LL), (long)(g_dsiMenuTiming.maxHud / 1000000LL));
+
+    g_dsiMenuTiming = DsiMenuTimingWindow{};
+}
+#endif // PLATFORM_DSI
+
 int32_t javaStringHash(const std::string &value)
 {
     uint32_t hash = 0;
@@ -498,6 +546,9 @@ void GuiMainMenu::renderSkybox(int_t mouseX, int_t mouseY, float_t partialTick)
 
 void GuiMainMenu::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
 {
+#if PLATFORM_DSI
+    long_t dsiPhaseStart = System::nanoTime();
+#endif
     const bool legacyUi = mc->gameSettings != nullptr && mc->gameSettings->legacyUI;
     hoveredControlIndex = legacyUi ? legacyHoveredSelectableButton(controlList, mouseX, mouseY) : -1;
     if (hoveredControlIndex >= 0)
@@ -507,6 +558,14 @@ void GuiMainMenu::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
 
     if (!legacyPanoramaDrawn)
         renderSkybox(mouseX, mouseY, partialTick);
+
+#if PLATFORM_DSI
+    {
+        const long_t now = System::nanoTime();
+        dsiMenuTimingAccumulate(g_dsiMenuTiming.background, g_dsiMenuTiming.maxBackground, now - dsiPhaseStart);
+        dsiPhaseStart = now;
+    }
+#endif
 
     if (legacyPanoramaDrawn)
     {
@@ -558,6 +617,14 @@ void GuiMainMenu::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
         }
     }
 
+#if PLATFORM_DSI
+    {
+        const long_t now = System::nanoTime();
+        dsiMenuTimingAccumulate(g_dsiMenuTiming.title, g_dsiMenuTiming.maxTitle, now - dsiPhaseStart);
+        dsiPhaseStart = now;
+    }
+#endif
+
     tess->setColorOpaque_I(0xffffff);
     const float_t splashScaleRaw = 1.8f - MathHelper::abs(MathHelper::sin(
         (static_cast<float_t>(System::currentTimeMillis() % 1000LL) / 1000.0f) * 3.1415927f * 2.0f) * 0.1f);
@@ -607,6 +674,14 @@ void GuiMainMenu::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
     drawCenteredString(fontRenderer, splashText, 0, -8, 0xffff00);
     renderPopMatrix();
 
+#if PLATFORM_DSI
+    {
+        const long_t now = System::nanoTime();
+        dsiMenuTimingAccumulate(g_dsiMenuTiming.splash, g_dsiMenuTiming.maxSplash, now - dsiPhaseStart);
+        dsiPhaseStart = now;
+    }
+#endif
+
     if (!legacyUi)
     {
         drawString(fontRenderer, "Minecraft 1.2.5", 2, height - 10, 0xffffff);
@@ -619,9 +694,23 @@ void GuiMainMenu::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
         drawLegacyMenuHints(fontRenderer, width, height, false);
     }
 
+#if PLATFORM_DSI
+    {
+        const long_t now = System::nanoTime();
+        dsiMenuTimingAccumulate(g_dsiMenuTiming.hints, g_dsiMenuTiming.maxHints, now - dsiPhaseStart);
+        dsiPhaseStart = now;
+    }
+#endif
+
     GuiScreen::drawScreen(mouseX, mouseY, partialTick);
 
 #if PLATFORM_DSI
+    {
+        const long_t now = System::nanoTime();
+        dsiMenuTimingAccumulate(g_dsiMenuTiming.buttons, g_dsiMenuTiming.maxButtons, now - dsiPhaseStart);
+        dsiPhaseStart = now;
+    }
+
     // Real-hardware diagnostic, requested directly after several rounds of
     // reported lag in this exact screen (severe, and possibly worse after
     // the last fix) with no way to see actual numbers without pulling the
@@ -640,5 +729,11 @@ void GuiMainMenu::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
             std::to_string(dsiGetHeapCeiling() / 1024u) + "KB";
         fontRenderer->drawStringWithShadow(ramLine, 2, 2, 0xffffff);
     }
+
+    {
+        const long_t now = System::nanoTime();
+        dsiMenuTimingAccumulate(g_dsiMenuTiming.hud, g_dsiMenuTiming.maxHud, now - dsiPhaseStart);
+    }
+    dsiMenuTimingReport();
 #endif
 }
