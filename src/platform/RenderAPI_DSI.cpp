@@ -714,6 +714,32 @@ void renderTextureImageRgba(int level, int width, int height, const void* pixels
 	tex->allocated = uploadTexture(g_boundTexture, *tex);
 }
 
+// Real-hardware symptom this fixes: once the panorama texture upload above
+// started actually succeeding, the main menu collapsed to roughly one
+// redraw every few seconds, with a white line visibly "climbing" the
+// screen as each one happened. legacyDrawPanorama() calls this every
+// single frame with the same fixed arguments (true, false, true) purely to
+// (re-)apply wrap/clamp -- but this used to call the full uploadTexture()
+// (CPU RGBA->DS pixel-format conversion over every pixel, then a real
+// glTexImage2D VRAM DMA of the whole texture) on every one of those calls.
+// While the panorama upload was still silently failing (before the fix
+// above), that cost nothing: glTexImageNtr2D() rejects a non-power-of-two
+// size in its first few instructions, before touching VRAM. Once it
+// started succeeding, "every frame" became "one full texture reupload to
+// VRAM every frame" -- for a background image, not a 2-frame animated
+// tile -- which is exactly the kind of sustained VRAM bus traffic that
+// would visibly race the display controller's own scanout of that same
+// VRAM bank, matching the reported "line climbing the screen" artifact.
+//
+// Wrap mode is a texture FORMAT FLAG (GL_TEXTURE_WRAP_S/T, set via
+// glTexParameter() below), not pixel data -- libnds's glTexParameter()
+// (nds/arm9/video/videoGL.c) just ORs a few bits into the active texture's
+// already-uploaded format register, no VRAM write at all. So re-applying
+// wrap mode every frame never needed a reupload in the first place; it
+// only reupload-ed because uploadTexture() bundled both operations
+// together. "blur" is tracked in DsiTexture but never turned into a GPU
+// parameter bit anywhere in this file (bilinear filtering isn't wired up
+// on this backend yet), so there is nothing to reapply for it here either.
 void renderTextureParameters(bool blur, bool, bool clamp)
 {
 	if (DsiTexture* tex = textureSlot(g_boundTexture))
@@ -721,7 +747,13 @@ void renderTextureParameters(bool blur, bool, bool clamp)
 		tex->blur = blur;
 		tex->clamp = clamp;
 		if (tex->allocated)
-			tex->allocated = uploadTexture(g_boundTexture, *tex);
+		{
+			int param = 0;
+			if (!tex->clamp)
+				param |= GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T;
+			glBindTexture(0, g_boundTexture);
+			glTexParameter(0, param);
+		}
 	}
 }
 
