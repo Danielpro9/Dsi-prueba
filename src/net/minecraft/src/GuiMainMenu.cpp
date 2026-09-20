@@ -23,6 +23,9 @@
 #include "pc/lwjgl/Keyboard.h"
 #include "platform/Input.h"
 #include "net/minecraft/src/legacy/LegacyMainMenu.h"
+#if PLATFORM_DSI
+#include "dsi/DsiEarlyInit.h"
+#endif
 #include "net/minecraft/src/legacy/LegacyPlayGameScreen.h"
 #include "net/minecraft/src/legacy/LegacyMainMenuLayout.h"
 #include "net/minecraft/src/legacy/LegacyMenuHints.h"
@@ -626,8 +629,16 @@ void GuiMainMenu::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
     // Minecraft::run()'s frame-count loop regardless of which screen is
     // showing -- the same string GuiIngame's F3 overlay reads in-world --
     // just never drawn while a GuiScreen (not GuiIngame) owns the frame, so
-    // it has been invisible here specifically until now.
+    // it has been invisible here specifically until now. Heap usage added
+    // alongside it on request, reusing the same numbers Display_dsi.cpp's
+    // heartbeat already logs to debug.log every 60 frames -- just surfaced
+    // on screen too now instead of only in the log.
     if (fontRenderer != nullptr && mc != nullptr)
-        fontRenderer->drawStringWithShadow(mc->debug, 2, 2, 0xffffff);
+    {
+        const std::string ramLine = mc->debug + ", " +
+            std::to_string(dsiGetHeapCommitted() / 1024u) + "/" +
+            std::to_string(dsiGetHeapCeiling() / 1024u) + "KB";
+        fontRenderer->drawStringWithShadow(ramLine, 2, 2, 0xffffff);
+    }
 #endif
 }
