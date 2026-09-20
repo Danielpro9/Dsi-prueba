@@ -133,9 +133,9 @@ void LegacyOptionsScreen::updateScreen()
 {
     GuiScreen::updateScreen();
     syncLegacySelection();
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
     const PlatformTextInputSnapshot pad = platformTextInputSnapshot(platformMenuPad());
-#if PLATFORM_PS2
+#if PLATFORM_PS2 || PLATFORM_DSI
     if ((pad.pressed & (PLATFORM_TEXT_CLOSE | PLATFORM_TEXT_SHIFT)) != 0)
     {
         if (mc != nullptr && mc->sndManager != nullptr)
@@ -148,7 +148,7 @@ void LegacyOptionsScreen::updateScreen()
         moveLegacySelection(-1);
     else if ((pad.pressed & PLATFORM_TEXT_DOWN) != 0)
         moveLegacySelection(1);
-#if PLATFORM_PS2
+#if PLATFORM_PS2 || PLATFORM_DSI
     if ((pad.pressed & PLATFORM_TEXT_LEFT) != 0)
         adjustLegacySelection(-1);
     else if ((pad.pressed & PLATFORM_TEXT_RIGHT) != 0)
