@@ -1,0 +1,54 @@
+#pragma once
+// DSi-only shadow of <condition_variable> -- see src/dsi/compat/mutex for
+// why this directory exists at all.
+//
+// wait()/wait_for() never actually block: there is no other thread on this
+// platform that could ever notify them, so blocking would just hang forever.
+// The predicate-taking overloads check the predicate once and return
+// immediately either way, which is the correct behaviour for the one case
+// that still reaches these on DSi's boot/render path -- none, currently
+// (ThreadedFileIOBase's own predicate loop was replaced outright, see
+// PlatformConfig.h's PLATFORM_ASYNC_FILE_IO) -- and an honest one for
+// anything multiplayer/applet-only that does not: it will see "predicate
+// already true or timed out", never a real wait.
+#include "mutex"
+
+namespace std
+{
+
+enum class cv_status
+{
+	no_timeout,
+	timeout
+};
+
+class condition_variable
+{
+public:
+	condition_variable() = default;
+	condition_variable(const condition_variable&) = delete;
+	condition_variable& operator=(const condition_variable&) = delete;
+
+	template <class Lock>
+	void wait(Lock&) {}
+
+	template <class Lock, class Predicate>
+	void wait(Lock&, Predicate pred)
+	{
+		(void)pred();
+	}
+
+	template <class Lock, class Duration>
+	cv_status wait_for(Lock&, const Duration&) { return cv_status::timeout; }
+
+	template <class Lock, class Duration, class Predicate>
+	bool wait_for(Lock&, const Duration&, Predicate pred)
+	{
+		return pred();
+	}
+
+	void notify_one() {}
+	void notify_all() {}
+};
+
+} // namespace std

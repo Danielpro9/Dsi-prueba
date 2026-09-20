@@ -1,0 +1,67 @@
+#pragma once
+// DSi-only shadow of <mutex>, picked up via an -I search order that puts
+// src/dsi/compat/ ahead of the real toolchain's own <mutex> -- see
+// Makefile.game's INCLUDEDIRS comment and PlatformConfig.h's
+// PLATFORM_ASYNC_FILE_IO comment for the full story.
+//
+// Why this exists at all: confirmed against the real BlocksDS/Wonderful
+// Toolchain (not a guess, not just this sandbox's local ARM toolchain --
+// see the "thread-probe" CI job) that its libstdc++ has no thread backend.
+// std::mutex/std::condition_variable do not exist there, and std::thread
+// (in <thread>, this directory) has no constructor able to actually launch
+// a callable.
+//
+// Every use of std::mutex left in the shared engine tree after
+// PLATFORM_ASYNC_FILE_IO's ThreadedFileIOBase fix is one of two things:
+//   1. Dead code on DSi -- multiplayer/applet/stats-sync classes
+//      (NetworkManager, StatsSyncher, MinecraftApplet, ...) that are never
+//      instantiated without a network stack DSi does not have wired up
+//      (see NO_NETWORK in the DSi Makefiles). They only need to type-check.
+//   2. A guard against ThreadedFileIOBase's background worker (RegionFile,
+//      RegionFileCache, AnvilChunkLoader, ServerNBTStorage, PacketCount).
+//      That worker does not exist on DSi (see PLATFORM_ASYNC_FILE_IO) --
+//      nothing ever runs concurrently with the thread holding the lock, so a
+//      real lock has nothing to exclude. A no-op is not an approximation
+//      here, it is the correct single-threaded implementation.
+namespace std
+{
+
+class mutex
+{
+public:
+	mutex() = default;
+	mutex(const mutex&) = delete;
+	mutex& operator=(const mutex&) = delete;
+
+	void lock() {}
+	void unlock() {}
+	bool try_lock() { return true; }
+};
+
+template <class Mutex>
+class lock_guard
+{
+public:
+	explicit lock_guard(Mutex&) {}
+	lock_guard(const lock_guard&) = delete;
+	lock_guard& operator=(const lock_guard&) = delete;
+};
+
+template <class Mutex>
+class unique_lock
+{
+public:
+	unique_lock() = default;
+	explicit unique_lock(Mutex&) : locked_(true) {}
+	unique_lock(const unique_lock&) = delete;
+	unique_lock& operator=(const unique_lock&) = delete;
+
+	void lock() { locked_ = true; }
+	void unlock() { locked_ = false; }
+	bool owns_lock() const { return locked_; }
+
+private:
+	bool locked_ = false;
+};
+
+} // namespace std

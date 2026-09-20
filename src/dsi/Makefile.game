@@ -28,8 +28,16 @@ NAME		:= OptiCraftDsi
 # own system/ (early init) and lwjgl/ (Display_dsi.cpp) trees. NOT "tools" or
 # "probe": those hold DsiBringup.cpp's and ThreadProbe.cpp's own main(),
 # which would collide with main_dsi.cpp's below.
+# NOT "compat": that shadow-header directory is deliberately excluded from
+# the recursive .cpp search below (it holds no .cpp files anyway) and only
+# feeds INCLUDEDIRS, so #include <mutex>/<thread>/<condition_variable>
+# resolve to it instead of the real toolchain's versions. See
+# src/dsi/compat/mutex for why.
 SOURCEDIRS	:= ../client ../java ../net ../util ../platform ../external system lwjgl
-INCLUDEDIRS	:= ..
+# "compat" first: for #include <...>, -I directories are searched in the
+# order given, before the compiler's own built-in system headers either way,
+# but listing it first here keeps that precedence obvious at a glance.
+INCLUDEDIRS	:= compat ..
 
 DEFINES		:= -DDSI_PLATFORM=1
 
@@ -83,7 +91,11 @@ SOURCES_CPP	:= $(shell echo "$(_ALL_CPP)" | tr ' ' '\n' \
 # so it does not also sweep up tools/ and probe/ next to it).
 SOURCES_CPP	+= main_dsi.cpp
 
-DEFINES		+= -D__NDS__ -D__BLOCKSDS__ -DARM9 -DNO_SOUND
+# NO_NETWORK: no DSWiFi wired up yet (see the ARM7ELF comment above), and it
+# is what already flips the existing PLATFORM_LOCAL_RESOURCES_ONLY knob (see
+# PlatformConfig.h) so ThreadDownloadResources scans resources synchronously
+# instead of spinning up a std::thread this toolchain cannot actually run.
+DEFINES		+= -D__NDS__ -D__BLOCKSDS__ -DARM9 -DNO_SOUND -DNO_NETWORK
 
 ARCH		:= -mthumb -mcpu=arm946e-s+nofp
 

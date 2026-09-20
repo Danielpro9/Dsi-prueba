@@ -124,6 +124,23 @@
 #  endif
 #endif
 
+// Whether a real background-thread worker exists to hand ThreadedFileIOBase's
+// queued chunk/region writes to. PS2 (PS2SDK), Wii (libogc's LWP, via
+// platform/Thread.cpp) and PC all have one. DSi does not: confirmed against
+// the real BlocksDS/Wonderful Toolchain (not just this sandbox's generic
+// local ARM toolchain) that arm-none-eabi-g++'s libstdc++ here has no thread
+// backend at all -- std::mutex/std::condition_variable do not exist, and
+// std::thread has no constructor able to actually launch a callable, only
+// its default/move ones (see the "thread-probe" CI job in
+// .github/workflows/dsi-bringup.yml). When this is 0, ThreadedFileIOBase
+// runs every queued task to completion synchronously, in queueIO() itself,
+// the same trade-off PLATFORM_LOCAL_RESOURCES_ONLY above already makes for
+// resource loading: a bounded synchronous stall instead of a background
+// write, not "no write."
+#ifndef PLATFORM_ASYNC_FILE_IO
+#  define PLATFORM_ASYNC_FILE_IO (!PLATFORM_DSI)
+#endif
+
 // Storage/region capabilities used by Minecraft-side save code.
 #ifndef PLATFORM_REGION_WHOLE_FILE_BUFFER
 #  define PLATFORM_REGION_WHOLE_FILE_BUFFER PLATFORM_PS2

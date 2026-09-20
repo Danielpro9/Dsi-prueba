@@ -1,12 +1,13 @@
 #include "ThreadedFileIOBase.h"
 
-#include <algorithm>
-#include <cstddef>
-#include <chrono>
-
 #include "IThreadedFileIO.h"
 
 ThreadedFileIOBase ThreadedFileIOBase::threadedIOInstance;
+
+#if PLATFORM_ASYNC_FILE_IO
+#include <algorithm>
+#include <cstddef>
+#include <chrono>
 
 ThreadedFileIOBase::ThreadedFileIOBase() :
 	writeQueuedCounter(0), savedIOCounter(0), isThreadWaiting(false), stopping(false),
@@ -126,3 +127,30 @@ void ThreadedFileIOBase::waitForFinish()
 	});
 	isThreadWaiting = false;
 }
+
+#else // !PLATFORM_ASYNC_FILE_IO
+
+// No background worker exists on this platform (see PlatformConfig.h's
+// comment on PLATFORM_ASYNC_FILE_IO). Every task runs to completion right
+// where it is queued instead of being handed off -- a bounded synchronous
+// stall on the caller (World/ChunkProvider/AnvilChunkLoader) in place of a
+// background write, not "the write never happens."
+ThreadedFileIOBase::ThreadedFileIOBase() {}
+ThreadedFileIOBase::~ThreadedFileIOBase() {}
+
+void ThreadedFileIOBase::queueIO(IThreadedFileIO *task)
+{
+	if (task == nullptr)
+		return;
+	while (task->writeNextIO())
+	{
+	}
+}
+
+void ThreadedFileIOBase::waitForFinish()
+{
+	// Nothing is ever left pending: queueIO() above already ran its task to
+	// completion before returning.
+}
+
+#endif // PLATFORM_ASYNC_FILE_IO

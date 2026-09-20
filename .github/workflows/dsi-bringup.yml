@@ -39,16 +39,22 @@ permissions:
 
 jobs:
   thread-probe:
-    # Answers one narrow question with the real toolchain: does BlocksDS's
-    # arm-none-eabi-g++ actually support std::thread/std::mutex/exceptions,
-    # or does it -- like the generic apt ARM toolchain used for local
-    # syntax-checking in the dev sandbox -- lack a thread backend? See
-    # src/dsi/probe/ThreadProbe.cpp for the full context. This does not touch
-    # DsiBringup.nds or dist/ at all; it is a standalone compile+link. The
-    # probe lives in src/dsi/probe/, not src/dsi/tools/ (DsiBringup's own
-    # SOURCEDIRS), so `make` never picks it up and collides with
-    # DsiBringup.cpp's main().
+    # Answered, definitively, the first time this ran: no. The real BlocksDS
+    # arm-none-eabi-g++ has no thread backend -- std::mutex/
+    # std::condition_variable do not exist in its libstdc++, and std::thread
+    # has no constructor able to launch a callable, only its default/move
+    # ones. This is why PlatformConfig.h's PLATFORM_ASYNC_FILE_IO exists and
+    # why src/dsi/compat/{mutex,thread,condition_variable} shadow the real
+    # headers for Makefile.game's build (see that Makefile's INCLUDEDIRS
+    # comment). Kept failing (continue-on-error) rather than deleted: it is
+    # now a live regression check -- if a future BlocksDS Docker image
+    # upgrade ever adds thread support, this job starts passing, which is
+    # the signal to revisit the compat shim and PLATFORM_ASYNC_FILE_IO.
+    # Does not touch DsiBringup.nds or dist/ at all. The probe lives in
+    # src/dsi/probe/, not src/dsi/tools/ (DsiBringup's own SOURCEDIRS), so
+    # `make` never picks it up and collides with DsiBringup.cpp's main().
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4

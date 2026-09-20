@@ -1,5 +1,8 @@
 #pragma once
 
+#include "platform/PlatformConfig.h"
+
+#if PLATFORM_ASYNC_FILE_IO
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -7,6 +10,7 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#endif
 
 class IThreadedFileIO;
 
@@ -25,6 +29,7 @@ public:
 
 private:
 	ThreadedFileIOBase();
+#if PLATFORM_ASYNC_FILE_IO
 	void run();
 	void processQueue();
 
@@ -38,4 +43,5 @@ private:
 	std::uint64_t savedIOCounter;
 	bool isThreadWaiting;
 	bool stopping;
+#endif
 };

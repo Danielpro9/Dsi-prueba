@@ -1,0 +1,72 @@
+#pragma once
+// DSi-only shadow of <thread> -- see src/dsi/compat/mutex for why this
+// directory exists at all.
+//
+// The callable passed to the constructor is deliberately never invoked:
+// there is no thread backend to run it on (confirmed against the real
+// BlocksDS toolchain, not assumed -- see PlatformConfig.h's
+// PLATFORM_ASYNC_FILE_IO comment), and this type is only reached by
+// multiplayer/applet/stats-sync classes that are dead code on DSi (no
+// network stack is wired up -- see NO_NETWORK in the DSi Makefiles) plus
+// ThreadedFileIOBase, which no longer uses std::thread at all on this
+// platform (its DSi branch runs synchronously instead, see
+// ThreadedFileIOBase.cpp). A silent no-run is the honest behaviour for
+// dead code; running it would be pretending concurrency exists where it
+// does not, and for a couple of these call sites (see e.g.
+// ThreadSleepForever::run()'s infinite loop) actually running it inline
+// would hang the program instead.
+//
+// joinable() always false means the destructor of a std::thread built this
+// way is always safe (never hits real std::thread's std::terminate() for a
+// joinable-but-undestroyed thread), and join()/detach() are no-ops for the
+// same reason: nothing was ever started to join or detach.
+#include <cstddef>
+#include <functional>
+
+namespace std
+{
+
+class thread
+{
+public:
+	class id
+	{
+	public:
+		friend bool operator==(id, id) { return true; }
+		friend bool operator!=(id, id) { return false; }
+	};
+
+	thread() = default;
+	thread(const thread&) = delete;
+	thread(thread&&) = default;
+	thread& operator=(const thread&) = delete;
+	thread& operator=(thread&&) = default;
+
+	template <class F, class... Args>
+	explicit thread(F&&, Args&&...) {}
+
+	~thread() = default;
+
+	bool joinable() const { return false; }
+	void join() {}
+	void detach() {}
+	id get_id() const { return id(); }
+
+	static unsigned hardware_concurrency() { return 1; }
+};
+
+namespace this_thread
+{
+inline thread::id get_id() { return thread::id(); }
+inline void yield() {}
+template <class Duration>
+inline void sleep_for(const Duration&) {}
+} // namespace this_thread
+
+template <>
+struct hash<thread::id>
+{
+	size_t operator()(thread::id) const noexcept { return 0; }
+};
+
+} // namespace std
