@@ -38,6 +38,79 @@ permissions:
   contents: write
 
 jobs:
+  thread-probe:
+    # Answers one narrow question with the real toolchain: does BlocksDS's
+    # arm-none-eabi-g++ actually support std::thread/std::mutex/exceptions,
+    # or does it -- like the generic apt ARM toolchain used for local
+    # syntax-checking in the dev sandbox -- lack a thread backend? See
+    # src/dsi/probe/ThreadProbe.cpp for the full context. This does not touch
+    # DsiBringup.nds or dist/ at all; it is a standalone compile+link. The
+    # probe lives in src/dsi/probe/, not src/dsi/tools/ (DsiBringup's own
+    # SOURCEDIRS), so `make` never picks it up and collides with
+    # DsiBringup.cpp's main().
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile and link ThreadProbe with the real BlocksDS toolchain
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -w /repo \
+            skylyrac/blocksds:slim-latest \
+            bash -lc '
+              set -e
+              CXX=/opt/wonderful/toolchain/gcc-arm-none-eabi/bin/arm-none-eabi-g++
+              BLOCKSDS=/opt/blocksds/core
+              ARCH="-mthumb -mcpu=arm946e-s+nofp"
+              SPECS=$BLOCKSDS/sys/crts/dsi_arm9.specs
+              mkdir -p /tmp/probe
+              $CXX -c src/dsi/probe/ThreadProbe.cpp -o /tmp/probe/ThreadProbe.o \
+                $ARCH -DARM9 -D__NDS__ -DDSI_PLATFORM=1 -std=gnu++17 \
+                -I$BLOCKSDS/libs/libnds/include -Wall -Wextra
+              echo "*** compiled ok, now linking ***"
+              $CXX /tmp/probe/ThreadProbe.o -o /tmp/probe/ThreadProbe.elf \
+                $ARCH -L$BLOCKSDS/libs/libnds/lib -specs=$SPECS \
+                -Wl,--start-group -lnds9 -lstdc++ -lc -Wl,--end-group
+              echo "*** linked ok -- std::thread/std::mutex/exceptions are usable on DSi ***"
+            '
+
+  game-build:
+    # The real game: OptiCraftDsi.nds, built from Makefile.game (the full
+    # shared src/client + src/net/minecraft/src + src/java + src/util +
+    # src/platform tree -- ~1100 files, see that Makefile's own comment).
+    # This is new and unproven, unlike DsiBringup.nds below, so it is its own
+    # job: a failure here must never be confused with, or block, the known-
+    # good bring-up build. continue-on-error is set because the first few
+    # runs of this are expected to surface real compile errors across many
+    # files at once -- that is the point of `make -k` (keep going past a
+    # failing file instead of stopping at the first one), so one CI round
+    # trip surfaces as much as possible instead of one error at a time.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build OptiCraftDsi.nds inside the BlocksDS container
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -w /repo/src/dsi \
+            skylyrac/blocksds:slim-latest \
+            bash -lc "make -f Makefile.game -k VERBOSE=1"
+
+      - name: Upload OptiCraftDsi build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OptiCraftDsi-build
+          path: |
+            src/dsi/OptiCraftDsi.nds
+            src/dsi/build/OptiCraftDsi.map
+          if-no-files-found: warn
+
   build:
     runs-on: ubuntu-latest
     steps:

@@ -5,7 +5,7 @@
 // -----------------------------------------------------------------------------
 // These describe behavior, not hardware APIs. Minecraft.cpp should consume these
 // neutral names rather than branching on Wii/PS2 directly.
-#if PLATFORM_PS2
+#if PLATFORM_PS2 || PLATFORM_DSI
 #  define PLATFORM_LOAD_TERRAIN_MIN_MS             PS2_LOAD_TERRAIN_MIN_MS
 #  define PLATFORM_LOAD_TERRAIN_WARMUP_MS          PS2_LOAD_TERRAIN_WARMUP_MS
 #  define PLATFORM_PRELOAD_LIGHTING_STEPS          4
@@ -25,7 +25,13 @@
 #  define PLATFORM_DEFER_PORTAL_TRANSITION          0
 #endif
 
-#if PLATFORM_PS2
+#if PLATFORM_PS2 || PLATFORM_DSI
+// DSi takes the PS2 branch here too: no real thread backend exists for it
+// (see platform/Thread.cpp -- DSi has no LWP-style thread API the way Wii
+// does), and this "keep a background thread alive doing nothing" hack is a
+// Windows timer-resolution workaround that is meaningless on a console
+// regardless. PLATFORM_CLIENT_PAID_CHECK/SYNC_STATS_ON_GUI_CHANGE are
+// account/network features neither PS2 nor an offline DSi cartridge needs.
 #  define PLATFORM_CLIENT_TIMER_HACK_THREAD          0
 #  define PLATFORM_CLIENT_PAID_CHECK                 0
 #  define PLATFORM_SYNC_STATS_ON_GUI_CHANGE          0

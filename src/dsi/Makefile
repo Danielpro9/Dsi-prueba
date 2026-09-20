@@ -83,7 +83,11 @@ SOURCES_CPP	:= $(shell find -L $(SOURCEDIRS) -name "*.cpp")
 #                            expected to be there.
 #   RenderAPI_DSI.cpp, Diagnostics_DSI.cpp, Resources_DSI.cpp,
 #   TextureResidencyPolicy_DSI.cpp, PlatformUserSettings_DSI.cpp,
-#   ScreenshotBackend_DSI.cpp, Profiler_DSI.cpp, ClientProfilerBackend_DSI.cpp
+#   ScreenshotBackend_DSI.cpp, Profiler_DSI.cpp, ClientProfilerBackend_DSI.cpp,
+#   RenderLightingProfile_DSI.cpp, RenderTerrainAPI_DSI.cpp,
+#   audio/SoundManager_DSI.cpp, InputBackend_DSI.cpp,
+#   LegacyControlPromptBackend_DSI.cpp, GameSettingsBackend_DSI.cpp,
+#   ClientPlatformPolicy_DSI.cpp
 #                        -- small platform backends, unused by the bring-up
 #                           smoke test itself but compiled here so they are
 #                           proven against the real toolchain, same reasoning
@@ -99,9 +103,16 @@ SOURCES_CPP	+= ../platform/Log.cpp \
 		   ../platform/PlatformUserSettings_DSI.cpp \
 		   ../platform/ScreenshotBackend_DSI.cpp \
 		   ../platform/Profiler_DSI.cpp \
-		   ../platform/ClientProfilerBackend_DSI.cpp
+		   ../platform/ClientProfilerBackend_DSI.cpp \
+		   ../platform/RenderLightingProfile_DSI.cpp \
+		   ../platform/RenderTerrainAPI_DSI.cpp \
+		   ../platform/audio/SoundManager_DSI.cpp \
+		   ../platform/InputBackend_DSI.cpp \
+		   ../platform/LegacyControlPromptBackend_DSI.cpp \
+		   ../platform/GameSettingsBackend_DSI.cpp \
+		   ../platform/ClientPlatformPolicy_DSI.cpp
 
-DEFINES		+= -D__NDS__ -D__BLOCKSDS__ -DARM9
+DEFINES		+= -D__NDS__ -D__BLOCKSDS__ -DARM9 -DNO_SOUND
 
 ARCH		:= -mthumb -mcpu=arm946e-s+nofp
 
@@ -138,7 +149,7 @@ CFLAGS		+= $(WARNFLAGS) $(INCLUDEFLAGS) $(DEFINES) \
 
 CXXFLAGS	+= $(WARNFLAGS) $(INCLUDEFLAGS) $(DEFINES) \
 		   $(ARCH) -O2 -ffunction-sections -fdata-sections \
-		   -std=gnu++17 -fno-exceptions -fno-rtti \
+		   -std=gnu++17 \
 		   -specs=$(SPECS)
 
 LDFLAGS		+= $(ARCH) $(LIBDIRSFLAGS) -Wl,-Map,$(MAP) $(DEFINES) \
