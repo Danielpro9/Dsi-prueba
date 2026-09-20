@@ -33,7 +33,7 @@ NAME		:= OptiCraftDsi
 # feeds INCLUDEDIRS, so #include <mutex>/<thread>/<condition_variable>
 # resolve to it instead of the real toolchain's versions. See
 # src/dsi/compat/mutex for why.
-SOURCEDIRS	:= ../client ../java ../net ../util ../platform ../external system lwjgl
+SOURCEDIRS	:= ../client ../java ../net ../util ../platform ../external system lwjgl java minecraft
 # "compat" first: for #include <...>, -I directories are searched in the
 # order given, before the compiler's own built-in system headers either way,
 # but listing it first here keeps that precedence obvious at a glance.
@@ -53,7 +53,15 @@ DEFINES		:= -DDSI_PLATFORM=1
 # core is enough. Swap to arm7_dswifi_maxmod.elf once networking/audio land.
 ARM7ELF		:= $(BLOCKSDS)/sys/arm7/main_core/arm7_minimal.elf
 
-LIBS		:= -lnds9
+# -latomic: the ARM946E-S (ARMv5TE) has no LDREXD/STREXD, so GCC emits calls
+# to __atomic_load_8/__atomic_exchange_4 (confirmed by the real BlocksDS
+# linker: "undefined reference to `__atomic_load_8'" from Random::Random()'s
+# std::atomic seed state, and to __atomic_exchange_4 from
+# ThreadDownloadImageData's destructor) for any 64-bit (and some 32-bit)
+# std::atomic that this CPU can't do a native RMW on. libatomic provides
+# those as lock-based fallbacks; every arm-none-eabi-gcc distribution ships
+# it alongside libstdc++/libgcc.
+LIBS		:= -lnds9 -latomic
 LIBDIRS		:= $(BLOCKSDS)/libs/libnds
 
 BUILDDIR	:= build/$(NAME)
