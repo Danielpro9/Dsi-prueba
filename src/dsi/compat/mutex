@@ -64,4 +64,27 @@ private:
 	bool locked_ = false;
 };
 
+class once_flag
+{
+public:
+	once_flag() = default;
+	once_flag(const once_flag&) = delete;
+	once_flag& operator=(const once_flag&) = delete;
+
+private:
+	bool called_ = false;
+
+	template <class Callable, class... Args>
+	friend void call_once(once_flag&, Callable&&, Args&&...);
+};
+
+template <class Callable, class... Args>
+void call_once(once_flag& flag, Callable&& f, Args&&... args)
+{
+	if (flag.called_)
+		return;
+	flag.called_ = true;
+	f(args...);
+}
+
 } // namespace std

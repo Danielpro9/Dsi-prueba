@@ -1,7 +1,7 @@
 #include "System.h"
 
 #include <chrono>
-#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM)
+#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !defined(DSI_PLATFORM)
 #include <SDL.h>
 #endif
 
@@ -20,8 +20,8 @@ long_t nanoTime()
 
 bool openURL(const std::string &url)
 {
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
-	// No browser to hand the URL to on either console.
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
+	// No browser to hand the URL to on any of the three consoles.
 	(void)url;
 	return false;
 #else

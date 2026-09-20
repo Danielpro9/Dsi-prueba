@@ -64,13 +64,20 @@ ROM		:= $(NAME).nds
 
 # zlib's own CMakeLists.txt generates zconf.h from zconf.h.cmakein via CMake's
 # configure_file() into the (CMake) build directory, never the source tree --
-# there is no configure script to run for a plain Makefile build instead, and
-# grep confirms zconf.h.cmakein has nothing to substitute besides an RCS-ID
-# comment (no real @VAR@ platform probing), so copying it verbatim is exactly
-# what that configure_file() call would have produced. Generated into our own
-# build/ dir, same as CMake would, rather than the submodule's checked-out
-# source tree.
-$(shell $(MKDIR) -p $(BUILDDIR)/zconf && cp -n ../../external/zlib/zconf.h.cmakein $(BUILDDIR)/zconf/zconf.h)
+# there is no configure script to run for a plain Makefile build instead.
+# zconf.h.cmakein has exactly two #cmakedefine lines (grep confirms no other
+# @VAR@/#cmakedefine platform probing): Z_PREFIX (off -- the "standard"
+# unprefixed zlib, which is what every #include <zlib.h> call site here
+# expects) and Z_HAVE_UNISTD_H (on -- BlocksDS/newlib provides <unistd.h>,
+# already relied on by PosixFileSystem.cpp). `#cmakedefine FOO` becomes
+# `#define FOO` when set or a comment when not, same as CMake's own
+# configure_file() would produce for these two values. Generated into our
+# own build/ dir, same as CMake would, rather than the submodule's checked-
+# out source tree.
+$(shell $(MKDIR) -p $(BUILDDIR)/zconf && sed \
+	-e 's/#cmakedefine Z_PREFIX/\/* #undef Z_PREFIX *\//' \
+	-e 's/#cmakedefine Z_HAVE_UNISTD_H/#define Z_HAVE_UNISTD_H/' \
+	../../external/zlib/zconf.h.cmakein > $(BUILDDIR)/zconf/zconf.h)
 
 PREFIX		:= $(ARM_NONE_EABI_PATH)arm-none-eabi-
 CC		:= $(PREFIX)gcc

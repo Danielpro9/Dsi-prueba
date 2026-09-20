@@ -604,6 +604,8 @@ void Config::sleep(long ms)
 	// Real sleep on this console: PlatformCompat::delay yields to libogc's
 	// scheduler, so audio and USB keep running while we wait.
 	PlatformCompat::delay((uint32_t)ms);
+#elif defined(DSI_PLATFORM)
+	PlatformCompat::delay((uint32_t)ms);
 #else
 	SDL_Delay((Uint32)ms);
 #endif
