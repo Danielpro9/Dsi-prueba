@@ -6,6 +6,7 @@
 #include "java/BufferedImage.h"
 #include "java/Type.h"
 #include "platform/Log.h"
+#include "LegacyUiPolicy.h"
 
 constexpr int_t LEGACY_PANORAMA_PS2_MAX_WIDTH = 512;
 constexpr int_t LEGACY_PANORAMA_WII_MAX_WIDTH = 1024;
@@ -100,7 +101,31 @@ int_t roundDownToPowerOfTwo(int_t value)
 std::unique_ptr<BufferedImage> legacyPreparePanoramaForUpload(
 	const std::string &name, std::unique_ptr<BufferedImage> image)
 {
-	if (!image || name != "/legacy/panorama.png")
+	// Real-hardware data (GuiMainMenu.cpp's per-section [dsi.perf] timing,
+	// added specifically to find this): the menu's "title" section alone was
+	// costing ~1-2 SECONDS on every single frame, indefinitely -- not once at
+	// boot, every frame, for as long as the menu stayed on screen. That shape
+	// (constant cost, no periodic pattern, no plateau after the first frame)
+	// matches this exact bug already fixed once for panorama.png below: a
+	// texture whose glTexImage2D() upload fails DS's exact-power-of-two check
+	// is never inserted into RenderEngine's textureMap (see that file's
+	// getTexture(), "Do not cache a broken texture id; retry the whole load
+	// on the next bind") -- so every call to legacyDrawTitleTexture() (once
+	// per menu frame) re-opens legacyUiTitleResourcePath() from the SD card,
+	// re-decodes the PNG, and re-attempts (and re-fails) the upload from
+	// scratch, forever. This function already existed to hand exactly this
+	// hardware limitation a texture it can accept for panorama.png; the
+	// legacy title banner is the same kind of real-photo-sourced, non-power-
+	// of-two, purely decorative image (explicitly flagged as such --
+	// legacyUiTitleResourcePath()'s own "hardcoded badd" comment), so it
+	// needs the identical treatment, not a second copy of it.
+	const bool isDsiLegacyDecorativeTexture =
+#if defined(DSI_PLATFORM)
+		name == "/legacy/panorama.png" || name == legacyUiTitleResourcePath();
+#else
+		name == "/legacy/panorama.png";
+#endif
+	if (!image || !isDsiLegacyDecorativeTexture)
 		return image;
 
 	const int_t sourceWidth = image->getWidth();
@@ -133,13 +158,18 @@ std::unique_ptr<BufferedImage> legacyPreparePanoramaForUpload(
 #elif defined(DSI_PLATFORM)
 	// Unlike PS2's GS or Wii's GX, the DS 3D texture unit requires an EXACT
 	// power of two per dimension -- not just "small enough". A real photo-
-	// sourced panorama.png is essentially never power-of-two, so without
+	// sourced panorama.png (and, since real hardware just proved it, the
+	// legacy title banner too) is essentially never power-of-two, so without
 	// this it silently failed to upload at all (RenderAPI_DSI.cpp's
 	// uploadTexture() now reports that failure instead of hiding it, but
 	// the actual fix is to hand it a texture the hardware can accept in the
-	// first place, seen missing entirely: a blank white background where the
-	// panorama image should be). 256 is also this console's own screen
-	// width, so there is no benefit to keeping a bigger texture resident.
+	// first place). For panorama.png that showed up as a blank white
+	// background; for the title banner it showed up as a ~1-2s-per-frame
+	// stall, since RenderEngine.cpp never caches a texture that fails this
+	// validity check, so the full SD decode+upload was retried from scratch
+	// on every single frame instead of once. 256 is also this console's own
+	// screen width, so there is no benefit to keeping either image bigger
+	// than that resident.
 	targetWidth = roundDownToPowerOfTwo(std::min<int_t>(sourceWidth, 256));
 	targetHeight = roundDownToPowerOfTwo(std::min<int_t>(sourceHeight, 256));
 #endif
