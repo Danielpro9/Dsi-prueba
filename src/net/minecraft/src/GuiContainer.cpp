@@ -22,7 +22,7 @@
 #include "pc/lwjgl/Keyboard.h"
 #include <algorithm>
 
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 #include "ContainerSlotNavigator.h"
 #include "platform/Input.h"
 #endif
@@ -41,7 +41,7 @@ GuiContainer::GuiContainer(Container *container, bool ownsContainer)
 
 GuiContainer::~GuiContainer()
 {
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 	// onGuiClosed() is the normal exit, but a container screen can also be
 	// destroyed while it is still the one the navigator points at (world change,
 	// shutdown), and that pointer is read from the pad poll rather than from a
@@ -70,7 +70,7 @@ void GuiContainer::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
 	int_t guiX = guiLeft;
 	int_t guiY = guiTop;
 
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 	ContainerSlotNavigator &navigator = ContainerSlotNavigator::instance();
 	Slot *controllerSlot = nullptr;
 	if (mc->gameSettings != nullptr && mc->gameSettings->legacyUI)
@@ -123,7 +123,7 @@ void GuiContainer::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
 	{
 		Slot *slot = inventorySlots->slots[i];
 		drawSlotInventory(slot);
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 		const bool selectedByController = slot == controllerSlot;
 		const bool selectedByPointer = controllerSlot == nullptr && getIsMouseOverSlot(slot, mouseX, mouseY);
 		if (selectedByController || selectedByPointer)
@@ -147,7 +147,7 @@ void GuiContainer::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
 	{
 		int_t carriedX = mouseX - guiX - 8;
 		int_t carriedY = mouseY - guiY - 8;
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 		if (controllerSlot != nullptr)
 		{
 			carriedX = controllerSlot->xDisplayPosition;
@@ -159,7 +159,7 @@ void GuiContainer::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
 		itemRenderer->renderItemOverlayIntoGUI(fontRenderer, mc->renderEngine, inv->getItemStack(), carriedX, carriedY);
 	}
 
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 	if (controllerSlot != nullptr)
 	{
 		renderDisable(RenderCapability::Lighting);
@@ -188,7 +188,7 @@ void GuiContainer::drawScreen(int_t mouseX, int_t mouseY, float_t partialTick)
 
 			int_t tooltipX = mouseX - guiX + 12;
 			int_t tooltipY = mouseY - guiY - 12;
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 			if (controllerSlot != nullptr)
 			{
 				tooltipX = controllerSlot->xDisplayPosition + 22;
@@ -353,7 +353,7 @@ void GuiContainer::keyTyped(char_t c, int_t key)
 
 void GuiContainer::onGuiClosed()
 {
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 	// Before the thePlayer guard below: the navigator has to be released even on
 	// the paths that return early here.
 	ContainerSlotNavigator::instance().notifyClosed(this);

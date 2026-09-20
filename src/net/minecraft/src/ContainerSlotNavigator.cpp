@@ -1,6 +1,6 @@
 #include "ContainerSlotNavigator.h"
 
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 
 #include <algorithm>
 

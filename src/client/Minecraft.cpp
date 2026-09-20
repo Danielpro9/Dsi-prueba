@@ -20,7 +20,7 @@
 #include <memory>
 #include <unordered_set>
 #include <typeinfo>
-#if defined(_WIN32) && !defined(PS2_PLATFORM) && !defined(WII_PLATFORM)
+#if defined(_WIN32) && !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !defined(DSI_PLATFORM)
 #include <windows.h>
 #endif
 #include "platform/RenderAPI.h"
@@ -118,7 +118,7 @@
 
 namespace
 {
-#if defined(_WIN32) && !defined(PS2_PLATFORM) && !defined(WII_PLATFORM)
+#if defined(_WIN32) && !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !defined(DSI_PLATFORM)
     bool validateProcessHeap(const char *stage)
     {
         const char *label = stage != nullptr ? stage : "<unknown>";

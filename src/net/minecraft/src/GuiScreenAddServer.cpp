@@ -26,7 +26,7 @@ void GuiScreenAddServer::updateScreen()
 
 void GuiScreenAddServer::initGui()
 {
-#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM)
+#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !defined(DSI_PLATFORM)
     lwjgl::Keyboard::enableRepeatEvents(true);
 #endif
     StringTranslate *translate = StringTranslate::getInstance();
@@ -47,7 +47,7 @@ void GuiScreenAddServer::initGui()
 
 void GuiScreenAddServer::onGuiClosed()
 {
-#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM)
+#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !defined(DSI_PLATFORM)
     lwjgl::Keyboard::enableRepeatEvents(false);
 #endif
 }

@@ -190,7 +190,7 @@ bool Config::isCustomFonts()
 
 int_t Config::getMaxRenderDistanceFine()
 {
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || PLATFORM_PC_LEGACY
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM) || PLATFORM_PC_LEGACY
 	// PLATFORM_VISIBLE_CHUNK_RADIUS is authoritative on fixed-grid backends.
 	return limit(PLATFORM_VISIBLE_CHUNK_RADIUS * 16, 32, 256);
 #else

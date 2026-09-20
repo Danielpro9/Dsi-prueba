@@ -360,9 +360,12 @@ declares."
 // Backends without a persistent geometry object submit ModelRenderer boxes from
 // their current transform. Wii and PS2 are both excluded: Wii compiles each box
 // once into a native GX display list, PS2 into a captured RAM mesh, and both
-// replay it against the live animated modelview.
+// replay it against the live animated modelview. DSi has neither a display-list
+// nor a persistent-mesh capability in RenderAPI_DSI.cpp -- this flag exists for
+// exactly this "rebuild every frame" case, just unused until now since PS2/Wii
+// both had a real capability to opt into instead.
 #ifndef PLATFORM_MODEL_IMMEDIATE
-#  define PLATFORM_MODEL_IMMEDIATE 0
+#  define PLATFORM_MODEL_IMMEDIATE PLATFORM_DSI
 #endif
 
 // Persistent native meshes are a backend capability. Wii records immutable GX

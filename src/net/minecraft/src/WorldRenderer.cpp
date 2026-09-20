@@ -46,7 +46,7 @@ namespace
 {
 	static float rendererAabbMargin()
 	{
-#if defined(PS2_PLATFORM) || defined(WII_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
 		// Consoles use a tuned conservative margin because their terrain clip paths
 		// and fixed renderer grids differ from desktop Advanced OpenGL.
 		return PLATFORM_RENDERER_AABB_MARGIN;
@@ -352,7 +352,7 @@ void WorldRenderer::updateInFrustrum(ICamera *icamera)
 
 
 
-#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !PLATFORM_PC_LEGACY
+#if !defined(PS2_PLATFORM) && !defined(WII_PLATFORM) && !defined(DSI_PLATFORM) && !PLATFORM_PC_LEGACY
 void WorldRenderer::updateRenderer()
 {
 	if (!needsUpdate)
