@@ -276,6 +276,42 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 	if (!mesh.data || mesh.count <= 0 || mesh.stride <= 0)
 		return false;
 
+	const std::uint8_t* base = static_cast<const std::uint8_t*>(mesh.data) + (std::size_t)mesh.first * mesh.stride;
+
+	// The DS GPU has one alpha value per polygon batch (POLY_ALPHA, see
+	// renderColor4f above), not per vertex -- there is no generalised
+	// per-fragment blend the way a per-vertex alpha byte would imply. A
+	// translucent Tessellator draw (GuiMainMenu's drawGradientRect vignette,
+	// drawPanorama's sample cross-fade) carries its alpha in mesh.hasColor's
+	// rgba[3], which the per-vertex glColor3b() call below drops on the
+	// floor -- glColor3b has no alpha parameter, and nothing else in this
+	// function ever reads rgba[3]. Net effect on real hardware: every such
+	// draw came out fully opaque regardless of what alpha the caller asked
+	// for. Average every vertex's alpha and latch that for the whole batch
+	// before applyPolyFormatIfDirty() below picks it up: an approximation
+	// for an actual gradient (the fade across the quad is lost, every vertex
+	// renders at one flat alpha), but it turns "always opaque" into
+	// "actually translucent", which is what every caller here expects and
+	// previously never got. Averaging rather than sampling one vertex
+	// matters concretely for drawGradientRect: its two calls for the menu
+	// vignette are top-transparent/bottom-opaque and top-opaque/bottom-
+	// transparent, so reading only the first vertex would render one of
+	// them at alpha 0 -- effectively deleting it -- instead of the
+	// in-between value the average gives both.
+	if (mesh.hasColor)
+	{
+		unsigned int alphaSum = 0;
+		for (int i = 0; i < mesh.count; ++i)
+		{
+			std::uint8_t alpha;
+			std::memcpy(&alpha, base + (std::size_t)i * mesh.stride + mesh.colorOffset + 3, sizeof(alpha));
+			alphaSum += alpha;
+		}
+		const float averageAlpha = static_cast<float>(alphaSum) / (255.0f * static_cast<float>(mesh.count));
+		g_poly.alpha31 = static_cast<std::uint8_t>(averageAlpha * 31.0f + 0.5f);
+		markPolyDirty();
+	}
+
 	applyPolyFormatIfDirty();
 
 	GL_GLBEGIN_ENUM glPrimitive = GL_TRIANGLES;
@@ -293,7 +329,41 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 			return false;
 	}
 
-	const std::uint8_t* base = static_cast<const std::uint8_t*>(mesh.data) + (std::size_t)mesh.first * mesh.stride;
+	// libnds's glVertex3f() converts straight to the DS vertex hardware's
+	// native format: v16, a 16-bit signed 4.12 fixed-point value (see
+	// floattov16() in nds/arm9/videoGL.h) that only represents roughly -8.0
+	// to +7.9998 -- and the conversion happens on the raw float passed in,
+	// BEFORE any modelview/projection matrix multiply (those run in much
+	// wider 20.12 fixed point, in hardware, after this). Every caller of
+	// this function submits vertices far outside +-8: GuiMainMenu's 2D
+	// draws use screen-pixel coordinates directly (0 to 256/192, the logo
+	// geometry out to 265), and nothing in the shared Tessellator/GuiScreen
+	// code has ever had to think about this, because no other backend
+	// (PC/PS2/Wii) has anything like it. Passed through unscaled, a
+	// coordinate like this either silently wraps -- 256.0 and 192.0 are
+	// both exact multiples of the v16 step (4096 units/px), so they wrap to
+	// exactly 0.0 -- or lands somewhere else nonsensical. This is the real
+	// hardware bug behind the DSi main menu photo: full-screen quads (the
+	// darkening vignette) painting nothing, and the logo/splash text
+	// collapsing into a garbled blob near the coordinate origin instead of
+	// spanning the screen.
+	//
+	// Fix: scale every vertex down by kVertexScale before glVertex3f() sees
+	// it, and push a matching glScalef(kVertexScale, ...) first, so the
+	// GPU's own matrix multiply -- done in that wider fixed point, not v16
+	// -- puts the geometry back where the caller meant it. kVertexScale is
+	// 8x the screen's own longer dimension (256): comfortably covers every
+	// 2D coordinate this engine draws (menus go out to a few hundred px at
+	// most) and every chunk-local 3D vertex offset (well under 256/8 = 32
+	// units) with a wide safety margin, while still leaving a v16 step of
+	// 256/4096 = 1/16 unit -- far finer than this console's 256x192 screen
+	// can show. Assumes GL_MODELVIEW is the active matrix mode, true for
+	// every vertex-submitting draw in this engine (GL_PROJECTION is only
+	// touched briefly for camera/ortho setup, never held across a
+	// Tessellator draw).
+	constexpr float kVertexScale = 256.0f;
+	glPushMatrix();
+	glScalef(kVertexScale, kVertexScale, kVertexScale);
 
 	glBegin(glPrimitive);
 	for (int i = 0; i < mesh.count; ++i)
@@ -333,14 +403,20 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 		std::memcpy(position, vertex, sizeof(position));
 		if (mesh.positionShort)
 		{
-			// positionShort means the position was already narrowed to a
-			// smaller range by the caller; the DS vertex hardware itself
-			// always wants the fixed-point v16 path (glVertex3f() below
-			// converts to it), so there is nothing extra to do here.
+			// positionShort means the source buffer stores the position as a
+			// compact GL_SHORT triple instead of 3 floats (see RenderAPI.h --
+			// a PC vertex-buffer bandwidth optimisation, unrelated to the v16
+			// hardware format discussed above). Nothing DSi-specific ever
+			// creates such a mesh today (only the PC/PS2 backends set this
+			// flag), so this is dead code on this backend; the memcpy above
+			// always reads 3 floats. Left in so a future DSi caller that does
+			// set it fails loudly (garbage values, not silently) instead of
+			// this comment going stale.
 		}
-		glVertex3f(position[0], position[1], position[2]);
+		glVertex3f(position[0] / kVertexScale, position[1] / kVertexScale, position[2] / kVertexScale);
 	}
 	glEnd();
+	glPopMatrix(1);
 
 	return true;
 }
