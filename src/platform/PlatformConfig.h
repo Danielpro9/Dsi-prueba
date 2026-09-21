@@ -220,22 +220,7 @@
 // re-points both contexts at the new draw buffer while PrimContext stays put,
 // so the every-other-frame old/black screen once blamed on per-context depth
 // state was really FRAME.FBP (see ps2_apply_color_mask).
-//
-// User photo evidence (DSi main menu, legacy UI): 3 of 6 button rows (Texture
-// Packs / Help & Options / Language -- the vertical band overlapping the
-// panorama's foreground terrain) rendered solid black backgrounds while the
-// other 3 (Play Game / Multiplayer / Quit Game) rendered the normal lavender
-// gradient. All 6 buttons share the same GuiButton::drawButton(), the same
-// /gui/gui.png texture, and (unselected, as in the photo) the same UV rect --
-// so the only thing that varies between them is screen position, which is
-// exactly what varies for a depth-test failure against the panorama's own 3D
-// geometry (real depth values, unlike a flat 2D overlay) drawn immediately
-// before this GUI pass in EntityRenderer.cpp. GuiScreen's own renderClear()
-// already clears the depth buffer before every screen draws, but did not
-// also disable depth testing on this platform -- a cleared buffer alone
-// should suffice, so this is a hypothesis pointing at the same class of bug
-// PS2/WII already guard against here, not a confirmed root cause.
-#  define PLATFORM_GUI_FORCE_DEPTH_DISABLED (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI)
+#  define PLATFORM_GUI_FORCE_DEPTH_DISABLED (PLATFORM_PS2 || PLATFORM_WII)
 #endif
 
 #ifndef PLATFORM_CHUNK_EDGE_FOG
