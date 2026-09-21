@@ -170,8 +170,28 @@ std::unique_ptr<BufferedImage> legacyPreparePanoramaForUpload(
 	// on every single frame instead of once. 256 is also this console's own
 	// screen width, so there is no benefit to keeping either image bigger
 	// than that resident.
-	targetWidth = roundDownToPowerOfTwo(std::min<int_t>(sourceWidth, 256));
-	targetHeight = roundDownToPowerOfTwo(std::min<int_t>(sourceHeight, 256));
+	//
+	// Width and height used to be capped to 256 and rounded down to the
+	// nearest power of two INDEPENDENTLY of each other. That is invisible on
+	// the panorama (legacyDrawPanorama() maps it with screen-relative UVs
+	// that already don't preserve its native aspect ratio, so a bit more
+	// distortion is lost in the noise), but the very next real-hardware test
+	// after extending this to the title banner reported it now rendering
+	// "muito estrecho" -- squashed -- because legacyFitTitleRect() DOES fit
+	// the banner to the texture's own (width, height) aspect ratio, and
+	// independent per-axis rounding can drift that ratio a long way from the
+	// source image's. Scaling both axes by the same factor first, then
+	// rounding the already-proportional result down to a power of two, keeps
+	// the quantisation error the same order of magnitude per axis instead of
+	// letting it compound into a visibly wrong aspect ratio.
+	{
+		const int_t longSide = std::max<int_t>(sourceWidth, sourceHeight);
+		const double scale = longSide > 256 ? 256.0 / static_cast<double>(longSide) : 1.0;
+		const int_t scaledWidth = std::max<int_t>(1, static_cast<int_t>(sourceWidth * scale + 0.5));
+		const int_t scaledHeight = std::max<int_t>(1, static_cast<int_t>(sourceHeight * scale + 0.5));
+		targetWidth = roundDownToPowerOfTwo(scaledWidth);
+		targetHeight = roundDownToPowerOfTwo(scaledHeight);
+	}
 #endif
 
 	if (targetWidth == sourceWidth && targetHeight == sourceHeight)
