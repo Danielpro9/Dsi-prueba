@@ -15,7 +15,7 @@
 #if !PLATFORM_PS2 && !PLATFORM_WII && !PLATFORM_DSI
 #include "SDL_clipboard.h"
 #endif
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
 #include "VirtualKeyboard.h"
 #include "ContainerSlotNavigator.h"
 #endif
@@ -293,16 +293,29 @@ void GuiScreen::initGui()
 void GuiScreen::handleInput()
 {
 	handleSpecializedMenuInput();
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
 	// Console GUI helpers consume the platform snapshot here, after the native
 	// backend has published this frame's controller state and before queued
 	// mouse/keyboard events are dispatched to the screen. Keeping this routing
 	// in shared GUI code prevents Wii/PS2 input backends from depending on
 	// Minecraft screen classes.
+	//
+	// DSi added to this outer gate, not the inner one below: both
+	// VirtualKeyboard.cpp and ContainerSlotNavigator.cpp already implement
+	// DSI_PLATFORM in their own `#if defined(...)` guards (this file's
+	// #include block above already reflects that), so their tick()s were
+	// fully DSi-ready and simply never got called here -- real-hardware
+	// report: the on-screen keyboard rendered (once EntityRenderer.cpp's
+	// separate render()-side gate was fixed) but never responded to D-pad
+	// input at all, because this is the ONLY place that drives its tick().
 	VirtualKeyboard::instance().tick();
 	if (!platformTextInputExclusive())
 		ContainerSlotNavigator::instance().tick();
 #if PLATFORM_PS2 || PLATFORM_WII
+	// Left PS2/WII-only, deliberately not widened with the outer gate above:
+	// unlike the two calls it follows, handleConsoleJavaUiNavigation() has
+	// not been checked for DSi-readiness this session, so this is not
+	// something to guess into enabling alongside the two confirmed fixes.
 	handleConsoleJavaUiNavigation();
 #endif
 #endif

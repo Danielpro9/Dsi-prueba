@@ -411,30 +411,44 @@ void LegacyCreateWorldScreen::keyTyped(char_t c, int_t key)
         return;
     }
 #if !PLATFORM_PS2 && !PLATFORM_WII
-    if (key == 200)
+    // Real-hardware report (DSi): opening the on-screen keyboard to type a
+    // world name, then pressing D-pad up/down to pick a letter, ALSO moved
+    // this screen's own row selection (World Name / Game Mode / More
+    // Options / ...) underneath it -- the same D-pad press reaching both
+    // VirtualKeyboard's grid navigation and this function's row navigation
+    // at once, since both are fed by the same key==200/208/... events. PS2/
+    // WII avoid exactly this by checking platformTextInputExclusive() in
+    // their own equivalent (updateScreen() above) before consuming a press;
+    // this path had no such check. Guard it the same way -- harmless
+    // elsewhere, since platformTextInputExclusive() is never true unless
+    // PLATFORM_HAS_VIRTUAL_KEYBOARD is set and a field is actually focused.
+    if (!platformTextInputExclusive())
     {
-        moveSelection(-1);
-        return;
-    }
-    if (key == 208 || key == 15)
-    {
-        moveSelection(1);
-        return;
-    }
-    // Left and right drive the difficulty slider. The name field keeps them for its
-    // caret, so they only reach a control once the selection has left the field.
-    if ((key == 203 || key == 205) && selectedControlIndex != 0)
-    {
-        adjustSelection(key == 203 ? -1 : 1);
-        return;
-    }
-    if (key == 28 || c == '\r')
-    {
-        if (selectedControlIndex == 0)
+        if (key == 200)
+        {
+            moveSelection(-1);
+            return;
+        }
+        if (key == 208 || key == 15)
+        {
             moveSelection(1);
-        else
-            activateSelection();
-        return;
+            return;
+        }
+        // Left and right drive the difficulty slider. The name field keeps them for its
+        // caret, so they only reach a control once the selection has left the field.
+        if ((key == 203 || key == 205) && selectedControlIndex != 0)
+        {
+            adjustSelection(key == 203 ? -1 : 1);
+            return;
+        }
+        if (key == 28 || c == '\r')
+        {
+            if (selectedControlIndex == 0)
+                moveSelection(1);
+            else
+                activateSelection();
+            return;
+        }
     }
 #endif
 
