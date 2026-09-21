@@ -1,4 +1,9 @@
-# OptiCraft Heritage
+# OptiCraft Heritage (WIP DSi PORT!!!)
+
+En alguna de las branchs de esta repo (ni idea de cual no me acuerdo) se esta vibecodeando un port de OptiCraft Heritage a la Nintendo DSi, de momento el renderizado esta completamente roto y pos, todo lo demas tambien XDDXD
+btw que yo sepa esta wea usa blocksds pero ni idea de como compilarlo como tal
+
+# README ORIGINAL:
 
 OptiCraft Heritage is a heavily modified, clean-room C++ implementation of classic Minecraft-era gameplay designed around portability, low-end hardware, and console-specific optimization.
 
