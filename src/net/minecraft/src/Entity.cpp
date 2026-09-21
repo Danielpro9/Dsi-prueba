@@ -622,7 +622,39 @@ void Entity::moveEntity(double d, double d1, double d2)
 	worldObj->collectCollisionSweep(this, boundingBox->addCoord(d, d1, d2), s_collisionSweep);
 	SweepLocalBox sweepBox;
 	sweepRebase(boundingBox, s_collisionSweep, sweepBox);
+#if PLATFORM_DSI
+	// The previous diagnostic here (moveEntity Y: requested=... etc.) lived in
+	// the #else branch below, which PLATFORM_FLOAT_COLLISION_SWEEP -- true for
+	// DSi, since PlatformGameTuning.h's "PLATFORM_PS2 || PLATFORM_DSI" block
+	// hands DSi PS2_FLOAT_COLLISION_SWEEP=1 wholesale -- never reaches. That is
+	// why it never once appeared in a debug.log despite several real-hardware
+	// fall-through-the-floor reports: it was dead code on this platform the
+	// entire time. This is the actual path DSi takes; the diagnostic moves
+	// here, against the real inputs to the resolution step (collectCollisionSweep
+	// finding boxes, sweepApplyY clamping against them), same throttle shape as
+	// before (every ~10 ticks, airborne player only).
+	static int_t s_dsiSweepLogCounter = 0;
+	bool dsiLogThisCall = false;
+	if (isPlayer() && !onGround)
+	{
+		if (++s_dsiSweepLogCounter >= 10)
+		{
+			s_dsiSweepLogCounter = 0;
+			dsiLogThisCall = true;
+		}
+	}
+	const double d1BeforeResolve = d1;
+#endif
 	sweepApplyY(s_collisionSweep, boundingBox, sweepBox, d1);
+#if PLATFORM_DSI
+	if (dsiLogThisCall)
+		MC_LOG_WARN("dsi", "sweepY: requested=%.3f resolved=%.3f sweepBoxes=%u origin=[%d,%d,%d] localBox=[%.2f..%.2f,%.2f..%.2f,%.2f..%.2f]\n",
+			d1BeforeResolve, d1, (unsigned)s_collisionSweep.boxes.size(),
+			s_collisionSweep.originX, s_collisionSweep.originY, s_collisionSweep.originZ,
+			(double)sweepBox.minX, (double)sweepBox.maxX,
+			(double)sweepBox.minY, (double)sweepBox.maxY,
+			(double)sweepBox.minZ, (double)sweepBox.maxZ);
+#endif
 	if (!field_9293_aM && d6 != d1)
 	{
 		d = d1 = d2 = 0.0;
@@ -639,44 +671,17 @@ void Entity::moveEntity(double d, double d1, double d2)
 		d = d1 = d2 = 0.0;
 	}
 #else
+	// Not DSi: PLATFORM_FLOAT_COLLISION_SWEEP is 1 there (inherited wholesale
+	// from PS2's tuning -- see PlatformGameTuning.h's "PLATFORM_PS2 ||
+	// PLATFORM_DSI" block), so DSi always takes the #if branch above instead.
+	// A DSi diagnostic lived here once; it was dead code the entire time it
+	// existed, since this branch never runs on that platform. See the real
+	// one next to sweepApplyY() above.
 	const std::vector<AxisAlignedBB *> &list = worldObj->getCollidingBoundingBoxes(this, boundingBox->addCoord(d, d1, d2));
-#if PLATFORM_DSI
-	// Real-hardware report: the player falls through ground that
-	// Minecraft.cpp's own airborne diagnostic (see that file's "falling:"
-	// log line) confirms reads as solid (World::getBlockId non-zero) and in
-	// a loaded chunk the whole way down -- so the block data itself is
-	// fine, and whatever is wrong is somewhere in HOW that data turns into
-	// a stopped fall. This is the actual resolution step: getCollidingBoundingBoxes()
-	// finding (or not finding) box(es) to clamp d1 against, and
-	// calculateYOffset() doing (or not doing) that clamp. Logging both ends
-	// of it tells which one is failing instead of continuing to read this
-	// code and guess. Same throttle shape as the other diagnostic (every
-	// ~10 ticks, airborne player only) for the same reason: cheap enough to
-	// leave on, correlatable with that log by matching timestamps.
-	static int_t s_dsiCollisionLogCounter = 0;
-	bool dsiLogThisCall = false;
-	const double d1BeforeResolve = d1;
-	if (isPlayer() && !onGround)
-	{
-		if (++s_dsiCollisionLogCounter >= 10)
-		{
-			s_dsiCollisionLogCounter = 0;
-			dsiLogThisCall = true;
-		}
-	}
-#endif
 	for (size_t i = 0; i < list.size(); i++)
 	{
 		d1 = list[i]->calculateYOffset(boundingBox, d1);
 	}
-#if PLATFORM_DSI
-	if (dsiLogThisCall)
-		MC_LOG_WARN("dsi", "moveEntity Y: requested=%.3f resolved=%.3f collidingBoxes=%u sweepBox=[%.2f..%.2f,%.2f..%.2f,%.2f..%.2f]\n",
-			d1BeforeResolve, d1, (unsigned)list.size(),
-			(double)boundingBox->minX, (double)boundingBox->maxX,
-			(double)boundingBox->minY, (double)boundingBox->maxY,
-			(double)boundingBox->minZ, (double)boundingBox->maxZ);
-#endif
 	boundingBox->offset(0.0, d1, 0.0);
 	if (!field_9293_aM && d6 != d1)
 	{

@@ -316,7 +316,7 @@ void LegacyCreateWorldScreen::moveSelection(int_t direction)
 void LegacyCreateWorldScreen::updateScreen()
 {
     GuiCreateWorld::updateScreen();
-#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
+#if PLATFORM_PS2 || PLATFORM_WII
     // The virtual keyboard owns the console text-input snapshot while a field is
     // focused. Do not let menu navigation consume the same presses underneath it.
     if (platformTextInputExclusive())
@@ -339,21 +339,14 @@ void LegacyCreateWorldScreen::updateScreen()
         adjustSelection(-1);
     else if ((pad.pressed & PLATFORM_TEXT_RIGHT) != 0)
         adjustSelection(1);
-#if PLATFORM_PS2 || PLATFORM_DSI
-    // DSi has no menu pointer either (platformMenuPointerActive() is always
-    // false there -- see InputBackend_DSI.cpp), so it takes PS2's
-    // unconditional branch rather than Wii's pointer-aware one below.
+#if PLATFORM_PS2
     if ((pad.pressed & PLATFORM_TEXT_TYPE) != 0)
         activateSelection();
 #elif PLATFORM_WII
     if (!platformMenuPointerActive() && (pad.pressed & PLATFORM_TEXT_TYPE) != 0)
         activateSelection();
 #endif
-#if PLATFORM_WII || PLATFORM_DSI
-    // DSi's B is this hardware's one cancel/back button (mapTextButtons() in
-    // InputBackend_DSI.cpp sets both PLATFORM_TEXT_BACK and _CLOSE for it),
-    // so checking BACK here matches Wii's shape rather than PS2's CLOSE check
-    // just above.
+#if PLATFORM_WII
     if ((pad.pressed & PLATFORM_TEXT_BACK) != 0)
     {
         mc->sndManager->playSoundFX("random.back", 1.0f, 1.0f);
