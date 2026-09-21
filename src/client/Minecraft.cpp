@@ -2017,6 +2017,9 @@ void Minecraft::startWorld(ISaveFormat *saveFormat, const std::string &s, const 
 
     // On constrained consoles, release resources that only belong to the menu
     // stack before the World constructor starts allocating chunks and storage.
+    // Not sufficient on its own for every platform -- see the second call to
+    // this same function at the end, once the loading screen this function
+    // shows is done, for why.
     ClientPlatformPolicy::releaseWorldEntryAssets(renderEngine);
 
     // Brackets the whole creation path, not just the constructor: everything the
@@ -2055,6 +2058,27 @@ void Minecraft::startWorld(ISaveFormat *saveFormat, const std::string &s, const 
         statFileWriter->readStat(StatList::startGameStat, 1);
         changeWorld2(world, "Loading level");
     }
+
+    // Second call, not a duplicate: real-hardware data (the DSi-only
+    // per-texture VRAM breakdown, added last round) showed
+    // /legacy/panorama.png still resident well after entering a world,
+    // despite the release call at the top of this function. Cause:
+    // loadingScreen->displayLoadingString()/setLoadingProgress() --
+    // LoadingScreenRenderer.cpp's drawLegacyLoadingBackground(), which runs
+    // throughout the loading screen this whole function shows via
+    // changeWorld1()/changeWorld2() above -- draws that SAME panorama as
+    // its own background on this platform (DSi is not excluded the way
+    // PS2 is, see drawLegacyLoadingBackground()'s own #if). Releasing it at
+    // the top only meant the loading screen's very next frame immediately
+    // reloaded it -- a wasted SD-read/decode/upload, and it then stayed
+    // resident for the rest of the run since nothing released it again.
+    // Releasing here too, once that loading screen is done being shown,
+    // actually frees the VRAM for gameplay's own textures (terrain.png/
+    // gui/items.png) the way the first call was always meant to on this
+    // platform. Harmless on PS2/wherever the first call already fully did
+    // its job: releaseTexture() is a no-op for a name that is not
+    // currently resident.
+    ClientPlatformPolicy::releaseWorldEntryAssets(renderEngine);
 }
 
 void Minecraft::usePortal(int_t targetDimension)
