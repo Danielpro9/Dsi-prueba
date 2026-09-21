@@ -59,14 +59,17 @@
 // Game-side optimization policies. These describe the reason a code path exists
 // instead of naming the console that first needed it.
 #ifndef PLATFORM_CACHE_NEAREST_PLAYER
-#  define PLATFORM_CACHE_NEAREST_PLAYER (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_PC_LEGACY)
+#  define PLATFORM_CACHE_NEAREST_PLAYER (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_PC_LEGACY || PLATFORM_DSI)
 #endif
 
 // The Wii takes the throttle too: it is a tick-rate policy over distance, not
 // an arithmetic shortcut, so it does not belong to PLATFORM_CONSOLE_LOW. The
-// radii and divisors it reads come from WiiWorldTuning.h.
+// radii and divisors it reads come from WiiWorldTuning.h on Wii; DSi inherits
+// PS2's PS2_ENTITY_AI_* values wholesale through the shared
+// "PLATFORM_PS2 || PLATFORM_DSI" block in PlatformGameTuning.h, so no new
+// tuning file is needed here.
 #ifndef PLATFORM_THROTTLE_ENTITY_AI
-#  define PLATFORM_THROTTLE_ENTITY_AI (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_PC_LEGACY)
+#  define PLATFORM_THROTTLE_ENTITY_AI (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_PC_LEGACY || PLATFORM_DSI)
 #endif
 
 // Entities with a chunk retention radius (the Ender Dragon) keep their
@@ -79,9 +82,12 @@
 
 // java.util.Random's 48-bit LCG step as 32-bit multiplies (see Random::next).
 // Bit-identical to the 64-bit product, so seeds stay compatible; it only
-// matters on cores where a 64-bit multiply is a library call.
+// matters on cores where a 64-bit multiply is a library call. The DSi's
+// ARM946E-S is a 32-bit core with no native 64x64 multiply either, and
+// Random::next() runs extremely often (terrain gen, every AI decision roll),
+// so it takes the same shortcut.
 #ifndef PLATFORM_RANDOM_SPLIT_MULTIPLY
-#  define PLATFORM_RANDOM_SPLIT_MULTIPLY (PLATFORM_PS2 || PLATFORM_WII)
+#  define PLATFORM_RANDOM_SPLIT_MULTIPLY (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI)
 #endif
 
 #ifndef PLATFORM_DIRECT_ANALOG_MOVEMENT
@@ -95,17 +101,21 @@
 // OptiFine custom animations (/anim/*.properties, custom_terrain_N.png,
 // custom_water_*.png...). Off on the consoles: nothing ships them, and the
 // probe alone is ~520 optional files x several spellings of failed opens on
-// every RenderEngine (re)load -- a FAT directory walk each over USB/SD.
+// every RenderEngine (re)load -- a FAT directory walk each over USB/SD. DSi
+// is a FAT/NitroFS platform too (see PLATFORM_DSI above) and RenderEngine's
+// refreshTextures()/loadCustomAnimations() run at boot and on almost every
+// GameSettings toggle (see the many refreshTextures() call sites in
+// GameSettings.cpp), so the same probe cost applies every time, not just once.
 #ifndef PLATFORM_OPTIFINE_CUSTOM_ANIMATIONS
-#  define PLATFORM_OPTIFINE_CUSTOM_ANIMATIONS (!(PLATFORM_PS2 || PLATFORM_WII))
+#  define PLATFORM_OPTIFINE_CUSTOM_ANIMATIONS (!(PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI))
 #endif
 
 #ifndef PLATFORM_OPTIFINE_RANDOM_MOBS
-#  define PLATFORM_OPTIFINE_RANDOM_MOBS (!(PLATFORM_PS2 || PLATFORM_WII))
+#  define PLATFORM_OPTIFINE_RANDOM_MOBS (!(PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI))
 #endif
 
 #ifndef PLATFORM_OPTIFINE_CUSTOM_FONTS
-#  define PLATFORM_OPTIFINE_CUSTOM_FONTS (!(PLATFORM_PS2 || PLATFORM_WII))
+#  define PLATFORM_OPTIFINE_CUSTOM_FONTS (!(PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI))
 #endif
 
 #ifndef PLATFORM_LOCAL_STATS
