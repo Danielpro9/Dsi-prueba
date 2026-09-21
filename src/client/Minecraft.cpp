@@ -1631,7 +1631,19 @@ void Minecraft::runTick()
     // numeric texture ID after the first request. Without this pump, a transient
     // USB/PAK failure could leave the checkerboard bound forever.
     renderEngine->updateBackgroundTextureLoads();
-    renderBindTexture(renderEngine->getTexture("/terrain.png"));
+#if PLATFORM_DSI
+    // DSi has no background asset loader (updateBackgroundTextureLoads() above
+    // is a PS2-only no-op here), so this line's only job on this platform is
+    // the unconditional getTexture("/terrain.png") -- forcing it resident (and,
+    // per RenderEngine.cpp's DSi-only upload-failure warning, retrying the full
+    // SD decode+upload every single tick if it is not) EVERY tick, at the main
+    // menu included, exactly the same "nothing at the menu ever needs a block
+    // texture" cost already found and fixed for updateDynamicTextures() below.
+    // Gating this the same way stops that main-menu churn without touching the
+    // real in-world pump PS2 still needs the unconditional bind for.
+    if (theWorld != nullptr)
+#endif
+        renderBindTexture(renderEngine->getTexture("/terrain.png"));
 
     if (!isGamePaused)
     {

@@ -341,6 +341,7 @@ bool RenderEngine::loadTextureInto(const std::string &s, int_t texture, bool app
 }
 
 #if PLATFORM_DSI
+#include "dsi/DsiEarlyInit.h"
 namespace
 {
 int g_dsiLastDecodedWidth = 0;
@@ -687,8 +688,23 @@ int_t RenderEngine::getTexture(const std::string &s)
 		// stops that from retrying forever once it doesn't.
 		static std::set<std::string> s_dsiWarnedTextures;
 		if (s_dsiWarnedTextures.insert(s).second)
-			MC_LOG_WARN("dsi", "texture '%s' (%dx%d) failed to upload (likely not power-of-two); using checkerboard\n",
-				s.c_str(), g_dsiLastDecodedWidth, g_dsiLastDecodedHeight);
+		{
+			// Real hardware already showed a texture failing here at a valid
+			// power-of-two size (gui/items.png, 256x256) -- uploadTexture()'s
+			// glTexImage2D() return value cannot tell "wrong size" and "the
+			// banks are full" apart, but the decoded dimensions here can:
+			// power-of-two and still failing means the second one. Naming
+			// which, plus how much of the 512 KB budget the rest of the
+			// resident textures already hold, turns the next real-hardware
+			// log into a number instead of another guess.
+			const bool isPowerOfTwo = g_dsiLastDecodedWidth > 0 && g_dsiLastDecodedHeight > 0 &&
+				(g_dsiLastDecodedWidth & (g_dsiLastDecodedWidth - 1)) == 0 &&
+				(g_dsiLastDecodedHeight & (g_dsiLastDecodedHeight - 1)) == 0;
+			MC_LOG_WARN("dsi", "texture '%s' (%dx%d) failed to upload (%s); ~%uKB/512KB texture VRAM already resident; using checkerboard\n",
+				s.c_str(), g_dsiLastDecodedWidth, g_dsiLastDecodedHeight,
+				isPowerOfTwo ? "valid power-of-two size, so texture VRAM must be full" : "not power-of-two",
+				(unsigned)(dsiTotalTextureVramBytes() / 1024u));
+		}
 		setupTexture(missingTextureImage.get(), texture, isTileAtlasResource(s), isTerrainAlphaFixResource(s));
 		if (renderTextureIsValid(texture))
 		{

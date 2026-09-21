@@ -1,6 +1,7 @@
 #pragma once
 #ifdef DSI_PLATFORM
 
+#include <cstddef>
 #include <nds/ndstypes.h>
 
 // Brings up video (top screen 3D via the libnds GL wrapper, bottom screen flat
@@ -46,5 +47,15 @@ void dsiUpdateTouchCameraDelta();
 // run once a frame, same place and for the same reason as
 // dsiUpdateTouchCameraDelta() above.
 void dsiPushGameplayKeyEvents();
+
+// Bytes of the 512 KB texture-image VRAM budget (four 128 KB banks, see
+// DsiEarlyVideo.cpp) currently spoken for by successfully-uploaded textures.
+// Defined in RenderAPI_DSI.cpp; RenderEngine.cpp calls this from its DSi-only
+// upload-failure warning so that log line reports the real budget state
+// instead of just the one texture that failed -- see that call site's own
+// comment for the real-hardware case (a valid power-of-two texture failing
+// to upload, which can only mean the banks were already full) that made a
+// guess not good enough here.
+std::size_t dsiTotalTextureVramBytes();
 
 #endif // DSI_PLATFORM

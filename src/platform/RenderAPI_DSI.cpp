@@ -123,8 +123,25 @@ struct DsiTexture
 	bool blur = false;
 	bool clamp = false;
 	bool allocated = false;
+	bool paletted = false; // Set by uploadTexture(): which VRAM format `allocated` actually used.
 	std::vector<std::uint8_t> rgba; // width*height*4, tightly packed RGBA8
 };
+
+// How many bytes of the four 128 KB texture-image banks (DsiEarlyVideo.cpp)
+// this slot's current upload actually holds: 0 if nothing is allocated, else
+// 1 byte/pixel for the GL_RGB256 paletted path or 2 for GL_RGBA. Exists so a
+// texture-upload failure (RenderEngine.cpp's DSi-only warning) can report how
+// much of the 512 KB budget was already spoken for at that moment instead of
+// just the one texture's own size -- real hardware already showed a valid
+// power-of-two texture (gui/items.png, 256x256) failing this way, which only
+// happens when the banks are full, and guessing what filled them wastes a
+// round-trip to real hardware that a number in the log line does not.
+std::size_t textureVramBytes(const DsiTexture& tex)
+{
+	if (!tex.allocated)
+		return 0;
+	return static_cast<std::size_t>(tex.width) * static_cast<std::size_t>(tex.height) * (tex.paletted ? 1u : 2u);
+}
 
 std::vector<DsiTexture> g_textures; // index 0 unused (0 means "no texture" in GL)
 int g_boundTexture = 0;
@@ -259,7 +276,7 @@ bool tryUploadPaletted(int name, const DsiTexture& tex, int param)
 // createMissingTexture()) actually engages the way it already does for a
 // texture that fails to *decode* -- a recognisable placeholder instead of an
 // invisible, silent failure.
-bool uploadTexture(int name, const DsiTexture& tex)
+bool uploadTexture(int name, DsiTexture& tex)
 {
 	if (tex.width <= 0 || tex.height <= 0 || tex.rgba.empty())
 		return false;
@@ -271,6 +288,7 @@ bool uploadTexture(int name, const DsiTexture& tex)
 	if (tryUploadPaletted(name, tex, param))
 	{
 		glTexParameter(0, param); // wrap bits already set above; kept for parity with callers that only touch params later
+		tex.paletted = true;
 		return true;
 	}
 
@@ -280,6 +298,7 @@ bool uploadTexture(int name, const DsiTexture& tex)
 	glBindTexture(0, name);
 	const int uploaded = glTexImage2D(0, 0, GL_RGBA, tex.width, tex.height, 0, param, converted.data());
 	glTexParameter(0, param); // wrap bits already set above; kept for parity with callers that only touch params later
+	tex.paletted = false;
 	return uploaded != 0;
 }
 
@@ -359,6 +378,18 @@ float g_fogStart = 0.0f;
 float g_fogEnd = 1.0f;
 
 } // namespace
+
+// Sum of textureVramBytes() across every currently-allocated texture: how much
+// of the 512 KB texture-image budget (DsiEarlyVideo.cpp's four banks) is
+// actually spoken for right now. See dsi/DsiEarlyInit.h's declaration for who
+// calls this and why.
+std::size_t dsiTotalTextureVramBytes()
+{
+	std::size_t total = 0;
+	for (const DsiTexture& tex : g_textures)
+		total += textureVramBytes(tex);
+	return total;
+}
 
 // -----------------------------------------------------------------------------
 // Static / captured mesh replay -- VERIFIED per-call mapping (glBegin/

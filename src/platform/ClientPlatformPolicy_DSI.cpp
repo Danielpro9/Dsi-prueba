@@ -84,6 +84,18 @@ void releaseWorldEntryAssets(RenderEngine* renderEngine)
 
 	renderEngine->releaseTexture("/legacy/panorama.png");
 	renderEngine->releaseTexture(legacyUiTitleResourcePath());
+	// StartupPresentation.cpp's playLegacyLogo() binds these once each, at
+	// boot, and nothing ever draws them again after that -- but nothing ever
+	// released them either, so they sat resident in VRAM for the rest of the
+	// run. Real-hardware data (the next test after the panorama/title release
+	// above) showed gui/items.png -- confirmed exactly 256x256, a valid
+	// power-of-two size -- still failing to upload once in a world, which
+	// with a valid size can only mean the four texture VRAM banks were still
+	// full (see the comment above this function). These two splash images
+	// are exactly the same class of "menu-only, safe to drop once gameplay
+	// starts" asset as panorama/title, just missed the first time.
+	renderEngine->releaseTexture("/legacy/logo1.png");
+	renderEngine->releaseTexture("/legacy/logo2.png");
 	renderEngine->clearDecodedTextureCache();
 }
 
