@@ -30,4 +30,14 @@ bool dsiEnsureStorage();
 // null pointer to check. Calls dsiEnsureStorage() for you.
 const char* dsiGetSaveDir();
 
+// Reads the touch screen and updates the per-frame stylus-drag delta
+// InputBackend_DSI.cpp's platformGamepadSnapshot() reports as the camera's
+// "right stick". Must run exactly once per frame -- Display_dsi.cpp's
+// processMessages() is the one call site, same place scanKeys() already runs
+// once per frame for the same reason (see that function's own comment).
+// Calling this more than once a frame, or from platformGamepadSnapshot()
+// itself, would compute the delta against a position already moved past by
+// an earlier call the same frame, undercounting fast drags.
+void dsiUpdateTouchCameraDelta();
+
 #endif // DSI_PLATFORM
