@@ -704,6 +704,20 @@ int_t RenderEngine::getTexture(const std::string &s)
 				s.c_str(), g_dsiLastDecodedWidth, g_dsiLastDecodedHeight,
 				isPowerOfTwo ? "valid power-of-two size, so texture VRAM must be full" : "not power-of-two",
 				(unsigned)(dsiTotalTextureVramBytes() / 1024u));
+			// The total above says HOW full the budget is, not WHAT filled it --
+			// print every resident texture's own cost so the next real-hardware
+			// log names the actual textures worth shrinking/releasing instead of
+			// guessing from the resource list. One-shot (same guard as the
+			// warning above), and only walks textureMap -- already an in-memory
+			// map lookup per entry, not a re-decode -- so this cannot become the
+			// unconditional-per-frame logging cost already found and reverted
+			// once this session.
+			for (const auto &entry : textureMap)
+			{
+				const std::size_t bytes = dsiTextureVramBytes(entry.second);
+				if (bytes > 0)
+					MC_LOG_WARN("dsi", "  resident: '%s' ~%uKB\n", entry.first.c_str(), (unsigned)(bytes / 1024u));
+			}
 		}
 		setupTexture(missingTextureImage.get(), texture, isTileAtlasResource(s), isTerrainAlphaFixResource(s));
 		if (renderTextureIsValid(texture))

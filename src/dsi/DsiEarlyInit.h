@@ -58,4 +58,9 @@ void dsiPushGameplayKeyEvents();
 // guess not good enough here.
 std::size_t dsiTotalTextureVramBytes();
 
+// Same cost query, for one already-resolved GL texture id. 0 if `name` holds
+// nothing right now. See dsiTotalTextureVramBytes() above for the budget this
+// is measured against.
+std::size_t dsiTextureVramBytes(int name);
+
 #endif // DSI_PLATFORM

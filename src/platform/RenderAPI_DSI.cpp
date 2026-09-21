@@ -391,6 +391,16 @@ std::size_t dsiTotalTextureVramBytes()
 	return total;
 }
 
+// Same cost query as above, for one texture name's already-resolved GL id.
+// Lets RenderEngine.cpp (which only knows resource-name -> id via its own
+// textureMap, not this file's internals) print a per-texture breakdown, not
+// just the running total.
+std::size_t dsiTextureVramBytes(int name)
+{
+	const DsiTexture* tex = textureSlot(name);
+	return tex ? textureVramBytes(*tex) : 0;
+}
+
 // -----------------------------------------------------------------------------
 // Static / captured mesh replay -- VERIFIED per-call mapping (glBegin/
 // glVertex3f/glTexCoord2f/glColor3b), APPROXIMATED overall performance: this
