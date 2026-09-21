@@ -104,9 +104,21 @@ void GuiGameOver::drawScreen(int_t i, int_t j, float_t f)
     if (hardcore)
         drawCenteredString(fontRenderer, StatCollector::translateToLocal("deathScreen.hardcoreInfo"), width / 2, 144, 0xffffff);
 
-    drawCenteredString(fontRenderer,
-                       StatCollector::translateToLocal("deathScreen.score") + ": §e" + std::to_string(mc->thePlayer->getScore()),
-                       width / 2, 100, 0xffffff);
+    // mc->thePlayer is checked everywhere else this screen touches it
+    // (actionPerformed()'s respawn/delete-world branches both guard it) --
+    // this was the one place that didn't, dereferencing it unconditionally
+    // right on the frame this screen first appears (the moment thePlayer
+    // died). Not proven to be the real-hardware crash reported alongside a
+    // death (a plain dark-red gradient screen with the game otherwise
+    // frozen -- this function's own drawGradientRect() background colour,
+    // not a distinct crash/exception screen, so whatever hung did so during
+    // or right after this draw), but it is a real, unguarded null
+    // dereference on exactly the code path that was running, so worth
+    // closing regardless of whether it turns out to be the whole story.
+    if (mc->thePlayer != nullptr)
+        drawCenteredString(fontRenderer,
+                           StatCollector::translateToLocal("deathScreen.score") + ": §e" + std::to_string(mc->thePlayer->getScore()),
+                           width / 2, 100, 0xffffff);
     GuiScreen::drawScreen(i, j, f);
 }
 
