@@ -1618,6 +1618,40 @@ void Minecraft::runTick()
         int_t i1 = MathHelper::floor_float((float)thePlayer->posZ) >> 4;
         configureChunkProviderCache(ichunkprovider, jv, i1, gameSettings->renderDistance);
         ClientProfiler::tickPhase("chunkCacheCfg", System::nanoTime() - clientPhaseStartNs);
+
+#if PLATFORM_DSI
+        // Real-hardware report: the player falls through solid ground a few
+        // seconds after a world finishes loading, with nothing in the log to
+        // say why -- debug.log has no instrumentation anywhere near
+        // collision/chunk-loading. Rather than keep reading the (apparently
+        // correctly-ordered) spawn/chunk-cache code and guessing, log the
+        // actual state every time the player is airborne: whether the block
+        // one step below their feet reads as solid, and whether the chunk
+        // column they are standing in is considered loaded at all. One of
+        // those being wrong on the very first log line after landing/
+        // spawning would confirm which side of "collision" is actually
+        // failing -- missing chunk data (getBlockId legitimately returning
+        // air) vs. present data the collision sweep itself is not seeing.
+        // Throttled to once every 10 ticks (0.5s) and only while airborne, so
+        // this cannot become a per-tick logging cost during normal play.
+        if (!thePlayer->onGround)
+        {
+            static int_t s_dsiFallLogTicks = 0;
+            if (++s_dsiFallLogTicks >= 10)
+            {
+                s_dsiFallLogTicks = 0;
+                const int_t footX = MathHelper::floor_double(thePlayer->posX);
+                const int_t footY = MathHelper::floor_double(thePlayer->posY) - 1;
+                const int_t footZ = MathHelper::floor_double(thePlayer->posZ);
+                const bool chunkLoaded = theWorld->chunkExists(footX >> 4, footZ >> 4);
+                const int_t blockId = theWorld->getBlockId(footX, footY, footZ);
+                MC_LOG_WARN("dsi", "falling: pos=%.1f,%.1f,%.1f motionY=%.3f chunkColumn(%d,%d)Loaded=%d blockBelowFeet(%d,%d,%d)=%d\n",
+                    (double)thePlayer->posX, (double)thePlayer->posY, (double)thePlayer->posZ,
+                    (double)thePlayer->motionY, (int)(footX >> 4), (int)(footZ >> 4),
+                    chunkLoaded ? 1 : 0, (int)footX, (int)footY, (int)footZ, (int)blockId);
+            }
+        }
+#endif
     }
 
     if (!isGamePaused && theWorld != nullptr)
