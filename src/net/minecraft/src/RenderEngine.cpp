@@ -659,24 +659,43 @@ int_t RenderEngine::getTexture(const std::string &s)
 		MC_LOG_DEBUG("render", "getTexture('%s'): upload failed, will retry next bind\n", s.c_str());
 #if PLATFORM_DSI
 		// DSi's GPU requires exact power-of-two texture dimensions
-		// (RenderAPI_DSI.cpp's uploadTexture()). A texture that fails that
-		// check on its very first load is never inserted into textureMap at
-		// all (see the comment above), so it silently redoes the full SD
-		// decode+upload on EVERY single call to getTexture() for the rest of
-		// the run -- exactly the bug already found and fixed for
-		// /legacy/title.png, which cost ~1-2s of every menu frame until it
-		// was caught. MC_LOG_DEBUG above never reaches the log at this
-		// platform's shipped MC_LOG_LEVEL=1, so this failure mode was
-		// otherwise completely invisible -- the only way it showed up at all
-		// was as an unexplained per-frame cost in GuiMainMenu.cpp's timing
-		// breakdown. Logged once per resource name, not every call:
-		// MC_LOG_SYNC_WRITES=1 makes every MC_LOG_WARN a synchronous SD card
-		// commit, and calling this unconditionally would repeat the exact
-		// logging-perf mistake already made and reverted once this session.
+		// (RenderAPI_DSI.cpp's uploadTexture()). The old behaviour here was
+		// to delete this GL name and hand the caller back that now-dangling
+		// id anyway -- every call site in the game (GuiIngame, ItemRenderer,
+		// RenderGlobal, ...) does renderBindTexture(getTexture(...)) with no
+		// validity check, so that dangling id got bound straight to the GPU.
+		// Binding a name with no VRAM allocation does not fail visibly: the
+		// DS GPU just keeps whatever texture was bound *before* it, so the
+		// quad drew with leftover pixels from an unrelated texture -- in
+		// practice whatever was drawn just before it, which tracks the
+		// screen's own background. That is the "a box appears over the
+		// text, coloured like the background" bug reported repeatedly this
+		// session: it was never specific to fonts, it hit any draw call
+		// right after any texture that silently failed to upload.
+		//
+		// Fall back to the checkerboard (always 64x64, always a valid
+		// power-of-two, so this upload cannot fail the same way) so this
+		// name is something real and bindable, and cache it in textureMap
+		// so every later getTexture() call for this resource reuses that
+		// bound id instead of redoing a full SD decode on every single bind
+		// -- the other half of the same cost already caught once for
+		// /legacy/title.png in GuiMainMenu.cpp's timing breakdown.
+		// failedTextures[] still gets a retry countdown, so if the real
+		// cause was transient VRAM pressure rather than a bad aspect ratio,
+		// a later bind can still recover the real texture; the existing
+		// dsiTextureRetryAttempts/DSI_TEXTURE_MAX_RETRIES cap (see above)
+		// stops that from retrying forever once it doesn't.
 		static std::set<std::string> s_dsiWarnedTextures;
 		if (s_dsiWarnedTextures.insert(s).second)
-			MC_LOG_WARN("dsi", "texture '%s' (%dx%d) failed to upload (likely not power-of-two); retrying every bind\n",
+			MC_LOG_WARN("dsi", "texture '%s' (%dx%d) failed to upload (likely not power-of-two); using checkerboard\n",
 				s.c_str(), g_dsiLastDecodedWidth, g_dsiLastDecodedHeight);
+		setupTexture(missingTextureImage.get(), texture, isTileAtlasResource(s), isTerrainAlphaFixResource(s));
+		if (renderTextureIsValid(texture))
+		{
+			textureMap[s] = texture;
+			failedTextures[s] = TEXTURE_RETRY_INTERVAL;
+			return texture;
+		}
 #endif
 		int_t name = texture;
 		renderDeleteTextures(1, &name);

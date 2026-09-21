@@ -94,6 +94,23 @@ int_t roundDownToPowerOfTwo(int_t value)
 		p *= 2;
 	return p;
 }
+
+// Opposite rounding direction, same clamp range, for the small Legacy UI
+// sprites below: the checkbox art and the in-game tip panel's nine-slice
+// border are a couple dozen pixels across to begin with, so rounding DOWN
+// like the decorative images above would throw away a third or more of an
+// already-tiny asset. Rounding UP costs a slightly larger (still trivially
+// small -- at most 32x32) paletted texture instead, which is not a VRAM
+// concern next to panorama/terrain.
+int_t roundUpToPowerOfTwo(int_t value)
+{
+	if (value <= 8)
+		return 8;
+	int_t p = 8;
+	while (p < value && p < 1024)
+		p *= 2;
+	return p;
+}
 #endif
 
 }
@@ -137,7 +154,34 @@ std::unique_ptr<BufferedImage> legacyPreparePanoramaForUpload(
 #else
 		name == "/legacy/panorama.png";
 #endif
-	if (!image || !isDsiLegacyDecorativeTexture)
+
+	// Real-hardware confirmation (the same one-shot RenderEngine.cpp warning
+	// that caught logo1.png/logo2.png above): /legacy/pointer_panel.png (24x24,
+	// LegacyTipHud.cpp's in-game tutorial-tip nine-slice border) and
+	// /legacy/tick.png (28x24, LegacyOptionCheckbox.cpp's checkbox mark) also
+	// fail the exact-power-of-two upload check. Unlike the decorative images
+	// above, a texture that never gets inserted into RenderEngine's textureMap
+	// does not just retry forever -- RenderEngine.cpp's getTexture() now binds
+	// the checkerboard placeholder in its place, since real hardware showed
+	// every unguarded renderBindTexture(getTexture(...)) call site in the game
+	// would otherwise draw whatever was last left in that VRAM address instead
+	// (the "a box appears over the text, coloured like the background" bug).
+	// The checkerboard is a safe fallback, not a good look for a tiny UI
+	// decoration, so still worth fixing at the source: resize the whole
+	// sprite up to a valid power of two, same as the panorama/title/logo
+	// path below. tickbox.png/tickbox_hovered.png are included pre-emptively
+	// (the resize below is a no-op if they already happen to be power-of-two)
+	// since they are the same kind of small Legacy4J UI art and share this
+	// exact failure mode if they ever turn out not to be.
+	const bool isDsiLegacyUiSprite =
+#if defined(DSI_PLATFORM)
+		name == "/legacy/pointer_panel.png" || name == "/legacy/tick.png" ||
+		name == "/legacy/tickbox.png" || name == "/legacy/tickbox_hovered.png";
+#else
+		false;
+#endif
+
+	if (!image || (!isDsiLegacyDecorativeTexture && !isDsiLegacyUiSprite))
 		return image;
 
 	const int_t sourceWidth = image->getWidth();
@@ -196,6 +240,25 @@ std::unique_ptr<BufferedImage> legacyPreparePanoramaForUpload(
 	// rounding the already-proportional result down to a power of two, keeps
 	// the quantisation error the same order of magnitude per axis instead of
 	// letting it compound into a visibly wrong aspect ratio.
+	if (isDsiLegacyUiSprite)
+	{
+		// These sprites are drawn either as a single UV-(0,0)-(1,1) quad
+		// (legacyDrawUiTexture(), tick.png/tickbox*.png) or as a nine-slice
+		// grid whose border/corner UVs are FRACTIONS of the whole texture
+		// (legacyDrawUiTextureNineSlice(), pointer_panel.png -- see
+		// LegacyUiTexture.cpp). Both read the entire texture as UV space
+		// 0..1, so resizing the whole image keeps every existing ratio
+		// exactly as it was; nothing downstream needs to know this resize
+		// happened. That is NOT true of the aspect-fit-to-256 branch below
+		// (legacyFitTitleRect() fits the draw rect to the image's aspect
+		// ratio, so THAT resize has to preserve it) -- these sprites are
+		// drawn into a caller-chosen rectangle independent of their own
+		// aspect ratio, so each axis can round up on its own with no
+		// distortion risk either way.
+		targetWidth = roundUpToPowerOfTwo(sourceWidth);
+		targetHeight = roundUpToPowerOfTwo(sourceHeight);
+	}
+	else
 	{
 		const int_t longSide = std::max<int_t>(sourceWidth, sourceHeight);
 		const double scale = longSide > 256 ? 256.0 / static_cast<double>(longSide) : 1.0;
