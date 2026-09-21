@@ -1640,7 +1640,29 @@ void Minecraft::runTick()
         const int_t everyN = PLATFORM_DYNAMIC_TEXTURE_INTERVAL_TICKS;
         const bool runDynamicTextures = (everyN <= 1) || ((s_dynamicTexturePhase % everyN) == 0);
         ++s_dynamicTexturePhase;
+#if PLATFORM_DSI
+        // Real-hardware data: the "release menu textures before entering a
+        // world" fix (ClientPlatformPolicy_DSI.cpp's releaseWorldEntryAssets())
+        // made no visible difference, and the reason turned out to be timing,
+        // not the fix itself -- updateDynamicTextures() (needed only to
+        // animate lava/fire/water/portal textures a loaded world displays)
+        // runs unconditionally every tick regardless of whether a world
+        // exists, so getTexture("/terrain.png")/("/gui/items.png") were
+        // already being requested -- and, per RenderEngine.cpp's DSi-only
+        // upload-failure warning, already failing and being retried every
+        // single tick -- from the very first frame of the main menu, long
+        // before the player ever chooses to play. That is well before
+        // releaseWorldEntryAssets()'s release call ever runs (right before
+        // World construction), so its freed VRAM was never in play for this
+        // particular failure. Nothing at the main menu ever displays a block
+        // or item texture, so there is nothing for this call to usefully
+        // animate without a world -- skip it entirely until one exists,
+        // which stops the pointless every-tick retry (and the VRAM/SD-read
+        // churn it was costing) for as long as the player sits at the menu.
+        if (runDynamicTextures && theWorld != nullptr)
+#else
         if (runDynamicTextures)
+#endif
             renderEngine->updateDynamicTextures();
         ClientProfiler::tickPhase("dynTex", System::nanoTime() - clientPhaseStartNs);
     }
