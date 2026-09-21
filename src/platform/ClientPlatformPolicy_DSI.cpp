@@ -4,6 +4,8 @@
 
 #include "platform/Log.h"
 #include "net/minecraft/src/GameSettings.h"
+#include "net/minecraft/src/RenderEngine.h"
+#include "net/minecraft/src/legacy/LegacyUiPolicy.h"
 #include "dsi/DsiEarlyInit.h"
 
 namespace ClientPlatformPolicy
@@ -59,8 +61,30 @@ void preloadStartupTextures(RenderEngine*)
 {
 }
 
-void releaseWorldEntryAssets(RenderEngine*)
+// Now measured, not guessed: RenderEngine.cpp's DSi-only upload-failure
+// warning (added to chase the menu perf bug) came back naming /terrain.png
+// and /gui/items.png -- BOTH already exactly 256x256, a perfectly valid
+// power-of-two size -- as failing to upload once a world was entered, with
+// render time then dominated by the resulting every-bind retry (RenderAPI_
+// DSI.cpp's uploadTexture() returning 0 covers both "not power-of-two" AND
+// "the DS's texture VRAM banks are full", and a correctly-sized texture
+// failing only leaves the latter). DsiEarlyVideo.cpp already dedicates all
+// four texture-capable banks (A-D, 128KB each = 512KB total, the hardware
+// maximum for texture data on this GPU) to textures; a 256x256 texture in
+// the DS's native 16-bit format is itself 128KB, a whole bank on its own,
+// and the main menu's own textures (the legacy panorama plus the title
+// banner, both resized to fit within 256x256 by LegacyPanoramaUpload.cpp)
+// are exactly the kind of thing PS2's equivalent below already found worth
+// releasing early for the same reason on the same constrained-VRAM problem.
+// getTexture() reloads either lazily if the main menu is shown again later.
+void releaseWorldEntryAssets(RenderEngine* renderEngine)
 {
+	if (renderEngine == nullptr)
+		return;
+
+	renderEngine->releaseTexture("/legacy/panorama.png");
+	renderEngine->releaseTexture(legacyUiTitleResourcePath());
+	renderEngine->clearDecodedTextureCache();
 }
 
 int panoramaSampleGrid()
