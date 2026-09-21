@@ -44,6 +44,16 @@ void dsiEnsureEarlyVideo()
 	vramSetBankC(VRAM_C_TEXTURE);
 	vramSetBankD(VRAM_D_TEXTURE);
 
+	// Texture PALETTE memory -- a separate pool from the image data banks
+	// above, required for RenderAPI_DSI.cpp's paletted (GL_RGB256) texture
+	// upload path: glColorTableNtr() writes the palette here, and without a
+	// bank mapped for it that call has nowhere to put the data. 64 KB is far
+	// more than this port needs (each GL_RGB256 palette is at most 512
+	// bytes -- 256 colours * 2 bytes -- so this covers well over a hundred
+	// distinct paletted textures resident at once, when only a handful ever
+	// will be).
+	vramSetBankE(VRAM_E_TEX_PALETTE);
+
 	glInit();
 	glEnable(GL_TEXTURE_2D);
 	glClearColor(0, 0, 0, 31);

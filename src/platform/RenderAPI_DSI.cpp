@@ -161,6 +161,89 @@ void convertRgba8ToDs(const std::uint8_t* src, std::uint16_t* dst, int pixelCoun
 	}
 }
 
+// Paletted (GL_RGB256) upload -- HALF the VRAM cost of GL_RGBA (1 byte per
+// pixel instead of 2), tried before it below. Real-hardware data this
+// session traced the remaining main-menu lag and the complete loss of 3D
+// world rendering to the same root cause: the DS 3D engine's texture image
+// VRAM is a hard 512 KB ceiling (DsiEarlyVideo.cpp's four 128 KB banks,
+// already the hardware maximum for this data), and terrain.png/gui/items.png/
+// gui/icons.png -- all confirmed exactly 256x256, a valid power-of-two size,
+// so the earlier power-of-two fixes do not apply here -- are 128 KB each in
+// GL_RGBA. Those three alone are 384 KB, and once font/gui.png and whatever
+// else a real scene needs are also resident, gameplay's own essential
+// textures were failing to fit at all, silently falling back to the same
+// "never cached, retried from scratch on every bind" path already fixed for
+// the menu's decorative textures -- except every failed bind here is a real
+// SD decode+upload attempt in the middle of drawing a frame, not once at
+// menu idle.
+//
+// GL_RGB256 stores one 8-bit palette index per pixel instead of a 16-bit
+// colour: half the memory for any texture with 255 or fewer distinct opaque
+// colours, which describes most block/item/icon pixel art (a handful of
+// shades per material) even if it does not describe a photo-sourced
+// panorama. Index 0 is reserved for GL_TEXTURE_COLOR0_TRANSPARENT ("this
+// index is fully transparent"), the same 1-bit alpha convertRgba8ToDs()
+// already uses for GL_RGBA -- no loss of transparency capability, just a
+// different place the one alpha bit lives. If the source image has more
+// than 255 distinct opaque colours (fails partway through the scan below),
+// this returns false and the caller falls through to the existing GL_RGBA
+// path unchanged -- trying this first can only help, never break a texture
+// that does not fit it.
+//
+// O(pixel count) time: one pass building a 32768-entry (all possible RGB555
+// values) direct-lookup table of "which palette index is this colour",
+// rather than a linear search of the growing palette per pixel. Runs once
+// per texture load (and once per animated sub-image update, same as
+// convertRgba8ToDs() already does for every upload today -- not a new cost
+// pattern, the same one this file already accepts), not per frame.
+bool tryUploadPaletted(int name, const DsiTexture& tex, int param)
+{
+	const std::size_t pixelCount = static_cast<std::size_t>(tex.width) * tex.height;
+
+	std::vector<std::int16_t> colorToIndex(32768, -1);
+	std::vector<std::uint16_t> palette;
+	palette.reserve(256);
+	palette.push_back(0); // Index 0's actual colour is irrelevant -- GL_TEXTURE_COLOR0_TRANSPARENT hides it.
+	std::vector<std::uint8_t> indices(pixelCount);
+
+	const std::uint8_t* src = tex.rgba.data();
+	for (std::size_t i = 0; i < pixelCount; ++i)
+	{
+		const std::uint8_t a = src[i * 4 + 3];
+		if (a < 128)
+		{
+			indices[i] = 0;
+			continue;
+		}
+
+		const std::uint8_t r = src[i * 4 + 0];
+		const std::uint8_t g = src[i * 4 + 1];
+		const std::uint8_t b = src[i * 4 + 2];
+		const std::uint16_t color15 = static_cast<std::uint16_t>(
+			(r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10));
+
+		std::int16_t index = colorToIndex[color15];
+		if (index < 0)
+		{
+			if (palette.size() >= 256)
+				return false; // More than 255 distinct opaque colours: doesn't fit this format.
+			index = static_cast<std::int16_t>(palette.size());
+			colorToIndex[color15] = index;
+			palette.push_back(color15);
+		}
+		indices[i] = static_cast<std::uint8_t>(index);
+	}
+
+	glBindTexture(0, name);
+	const int uploaded = glTexImage2D(0, 0, GL_RGB256, tex.width, tex.height, 0,
+		param | GL_TEXTURE_COLOR0_TRANSPARENT, indices.data());
+	if (!uploaded)
+		return false;
+
+	glColorTableNtr(palette.size(), palette.data());
+	return true;
+}
+
 // Returns whether the DS GPU actually accepted this texture. glTexImage2D()
 // (really glTexImageNtr2D(), see nds/arm9/videoGL.h) requires each dimension
 // to be an EXACT power of two from 8 to 1024 and returns 0 -- uploading
@@ -181,12 +264,18 @@ bool uploadTexture(int name, const DsiTexture& tex)
 	if (tex.width <= 0 || tex.height <= 0 || tex.rgba.empty())
 		return false;
 
-	std::vector<std::uint16_t> converted(static_cast<std::size_t>(tex.width) * tex.height);
-	convertRgba8ToDs(tex.rgba.data(), converted.data(), tex.width * tex.height);
-
 	int param = 0;
 	if (!tex.clamp)
 		param |= GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T;
+
+	if (tryUploadPaletted(name, tex, param))
+	{
+		glTexParameter(0, param); // wrap bits already set above; kept for parity with callers that only touch params later
+		return true;
+	}
+
+	std::vector<std::uint16_t> converted(static_cast<std::size_t>(tex.width) * tex.height);
+	convertRgba8ToDs(tex.rgba.data(), converted.data(), tex.width * tex.height);
 
 	glBindTexture(0, name);
 	const int uploaded = glTexImage2D(0, 0, GL_RGBA, tex.width, tex.height, 0, param, converted.data());
