@@ -1379,21 +1379,27 @@ void EntityRenderer::updateCameraAndRender(float partialTicks)
         
         if (mc->gameSettings->limitFramerate == 2)
         {
-            int64_t sleepTime = (field_28133_I + (int64_t)(1000000000LL / (long)fpsLimitChar) - 
+            // No "+= 10 when behind schedule" fudge here, unlike an earlier
+            // version of this block: the in-world branch just above (see its
+            // own identical sleepTime computation) never adds one, and there
+            // was no comment anywhere explaining why the menu path should
+            // behave differently. A negative sleepTime means this frame
+            // already overran the 40fps target; forcing it back into the
+            // (0, 500) delay range with += 10 turned "we are already late"
+            // into "now also wait up to 10ms more", every single frame the
+            // overrun was under 10ms -- worse than doing nothing, and only
+            // on the menu/no-world path, never in-world. Left as a plain
+            // skip-when-negative check, matching the world branch exactly.
+            const int64_t sleepTime = (field_28133_I + (int64_t)(1000000000LL / (long)fpsLimitChar) -
                                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                                     std::chrono::steady_clock::now().time_since_epoch()).count()) / 1000000LL;
-            
-            if (sleepTime < 0)
-            {
-                sleepTime += 10;
-            }
-            
+
             if (sleepTime > 0 && sleepTime < 500)
             {
                 PlatformCompat::delay((uint32_t)sleepTime);
             }
         }
-        
+
         field_28133_I = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
     }
