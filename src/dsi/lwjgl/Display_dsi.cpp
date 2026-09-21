@@ -87,6 +87,7 @@ void processMessages()
 	if (keysDown() & KEY_START)
 		g_closeRequested = true;
 	dsiUpdateTouchCameraDelta();
+	dsiPushGameplayKeyEvents();
 }
 
 void swapBuffers()

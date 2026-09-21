@@ -6,20 +6,40 @@
 #include <nds.h>
 
 #include "dsi/DsiEarlyInit.h"
+#include "lwjgl/Keyboard.h"
+#include "lwjgl/Mouse.h"
 
 // Menu-navigation input: the D-pad and A/B drive the console-style menu list
 // (GuiMainMenu.cpp's updateScreen() PLATFORM_PS2 || PLATFORM_WII branch, now
 // also PLATFORM_DSI), the same mechanism PS2/Wii already use --
 // InputBackend_PS2.cpp is the reference this mirrors.
 //
-// In-game controls, added directly on request: the D-pad drives movement
-// (platformGamepadSnapshot()'s leftX/leftY feed MovementInputFromOptions.cpp
-// the same way PS2's analog stick does, via PLATFORM_DIRECT_ANALOG_MOVEMENT --
-// see DsiInputTuning.h) and the touch screen drives the camera (rightX/rightY
-// feed EntityRenderer.cpp's PLATFORM_DIRECT_CAMERA_ENABLED path the same way
-// PS2's right stick does). Both reuse PS2's already-working formulas as-is;
-// nothing new was invented for how a "stick" value turns into movement/camera
-// motion, only how this hardware's D-pad/touchscreen produce that value.
+// In-game controls, added directly on request. Full scheme:
+//   D-pad            movement (platformGamepadSnapshot()'s leftX/leftY, see
+//                     below)
+//   Touch screen      camera (rightX/rightY, see below)
+//   L                 place block  (keyBindUseItem)
+//   R                 break block  (keyBindAttack)
+//   A                 jump         (keyBindJump)
+//   X                 inventory    (keyBindInventory)
+//   Y                 chat         (keyBindChat -- multiplayer only, see
+//                     dsiPushGameplayKeyEvents()'s own comment)
+//   B + D-pad Left/Right   step the hotbar selection
+//
+// Movement/camera feed MovementInputFromOptions.cpp / EntityRenderer.cpp's
+// PLATFORM_DIRECT_ANALOG_MOVEMENT / PLATFORM_DIRECT_CAMERA_ENABLED paths, the
+// same ones PS2's analog stick already uses (see DsiInputTuning.h) -- nothing
+// new was invented for how a "stick" value turns into movement/camera motion,
+// only how the D-pad/touchscreen produce that value.
+//
+// L/R/A/X/Y/hotbar instead go through dsiPushGameplayKeyEvents() below,
+// which synthesizes the same lwjgl::Keyboard/Mouse events a real keyboard or
+// mouse press would queue (Keyboard_dsi.cpp/Mouse_dsi.cpp now carry a real
+// event queue, fed the same way PS2's Keyboard_ps2.cpp/Mouse_ps2.cpp already
+// are) -- Minecraft.cpp's existing input-processing loop (KeyBinding state,
+// clickMouse(), changeCurrentItem() for the wheel) already does the right
+// thing with those events unmodified, so this reuses that instead of
+// duplicating its logic.
 //
 // Does not call scanKeys() here: Display_dsi.cpp's processMessages() already
 // calls it exactly once per frame (its isCloseRequested()/KEY_START check
@@ -46,6 +66,12 @@ float g_touchDeltaY = 0.0f;
 // than-full-screen drag to still reach full turn speed; unverified against
 // real hardware feel, same caveat as DsiInputTuning.h's own.
 constexpr float kTouchDragPixelsForFullDeflection = 24.0f;
+
+// Previous frame's held mask for the L/R/A/X/Y action buttons, so
+// dsiPushGameplayKeyEvents() can tell a fresh press/release apart from a
+// button still being held (a real keyboard/mouse only sends one down event
+// per press, not one every frame it stays held).
+std::uint32_t g_prevActionButtons = 0;
 
 float normalizeDrag(float deltaPixels)
 {
@@ -109,6 +135,53 @@ void dsiUpdateTouchCameraDelta()
 		g_prevTouchY = touch.py;
 	}
 	g_touchWasDown = touching;
+}
+
+void dsiPushGameplayKeyEvents()
+{
+	const std::uint32_t held = keysHeld();
+	// keysDown(): bits newly pressed since the scanKeys() call Display_dsi.cpp's
+	// processMessages() already made this frame (see this file's header
+	// comment on why nothing here calls scanKeys() itself).
+	const std::uint32_t pressedEdge = keysDown();
+	const std::uint32_t changed = held ^ g_prevActionButtons;
+
+	// L/R: place/break. keyBindUseItem/keyBindAttack default to mouse
+	// buttons 1/0 (GameSettings.cpp's -99/-100 keyCodes), so a real mouse
+	// press is what these need to look like, not a keyboard key.
+	if (changed & KEY_L)
+		lwjgl::Mouse::detail::pushButton(1, (held & KEY_L) != 0, 0, 0);
+	if (changed & KEY_R)
+		lwjgl::Mouse::detail::pushButton(0, (held & KEY_R) != 0, 0, 0);
+
+	// A/X/Y: jump/inventory/chat, keyBindJump/keyBindInventory/keyBindChat's
+	// default keyboard keys (space/E/T).
+	if (changed & KEY_A)
+		lwjgl::Keyboard::detail::pushKey(lwjgl::Keyboard::KEY_SPACE, (held & KEY_A) != 0);
+	if (changed & KEY_X)
+		lwjgl::Keyboard::detail::pushKey(lwjgl::Keyboard::KEY_E, (held & KEY_X) != 0);
+	// Chat only opens in a multiplayer world (Minecraft.cpp gates GuiChat on
+	// isMultiplayerWorld()), which this NO_NETWORK build can never have --
+	// wired for parity with the requested scheme and in case networking is
+	// ever added, not because it does anything today.
+	if (changed & KEY_Y)
+		lwjgl::Keyboard::detail::pushKey(lwjgl::Keyboard::KEY_T, (held & KEY_Y) != 0);
+
+	// B + Left/Right: step the hotbar selection, the same mouse-wheel path
+	// a real scroll wheel drives (Minecraft.cpp's
+	// thePlayer->inventory->changeCurrentItem(wheel)). A chord, not its own
+	// binding, since B alone already means "back/close" in menu navigation
+	// (see mapTextButtons() above) -- the two never conflict, since a menu
+	// being open and gameplay both consuming input at once can't happen.
+	if (held & KEY_B)
+	{
+		if (pressedEdge & KEY_LEFT)
+			lwjgl::Mouse::detail::pushWheel(-1, 0, 0);
+		if (pressedEdge & KEY_RIGHT)
+			lwjgl::Mouse::detail::pushWheel(1, 0, 0);
+	}
+
+	g_prevActionButtons = held;
 }
 
 PlatformGamepadSnapshot platformGamepadSnapshot(int)

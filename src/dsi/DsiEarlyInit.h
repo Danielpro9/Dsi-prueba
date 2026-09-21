@@ -40,4 +40,11 @@ const char* dsiGetSaveDir();
 // an earlier call the same frame, undercounting fast drags.
 void dsiUpdateTouchCameraDelta();
 
+// Turns the L/R/A/X/Y/hotbar-chord action buttons into the same
+// lwjgl::Keyboard/Mouse events a real keyboard/mouse press would queue (see
+// InputBackend_DSI.cpp's header comment for the full button scheme). Must
+// run once a frame, same place and for the same reason as
+// dsiUpdateTouchCameraDelta() above.
+void dsiPushGameplayKeyEvents();
+
 #endif // DSI_PLATFORM

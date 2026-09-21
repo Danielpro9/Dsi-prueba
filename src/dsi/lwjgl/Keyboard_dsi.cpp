@@ -1,21 +1,53 @@
 // Keyboard_dsi.cpp — DSi implementation of lwjgl::Keyboard.
 //
-// Real input (buttons, touch screen) is explicitly deferred (see
-// InputBackend_DSI.cpp and the project brief) -- no pad/keyboard poll exists
-// yet to call detail::pushKey()/pushChar() declared in lwjgl/Keyboard.h, so
-// this reports "nothing ever pressed" rather than leaving the many GUI call
-// sites (GuiChat, GuiCreateWorld, GameSettings key-name lookup, ...) as
-// unresolved link errors. Once real DSi input is designed, that poll
-// implementation is the only thing that needs to feed this queue.
+// Was a full stub (queue always empty) while real input was deferred. Now
+// fed the same way PS2's Keyboard_ps2.cpp already is: InputBackend_DSI.cpp's
+// per-frame button poll calls detail::pushKey() for the physical buttons
+// mapped to keyboard-bound actions (jump, inventory, chat -- see
+// InputBackend_DSI.cpp's own comment for the full button scheme), and
+// Minecraft.cpp's existing `while (lwjgl::Keyboard::next())` loop consumes
+// them exactly as if they were real key presses.
 #ifdef DSI_PLATFORM
 
 #include "lwjgl/Keyboard.h"
 #include "lwjgl/KeyNames.h"
 
+#include <queue>
+
 namespace lwjgl
 {
 namespace Keyboard
 {
+
+namespace detail
+{
+
+struct Event
+{
+	int key;
+	int character;
+	bool down;
+};
+
+static Event s_current = {};
+static std::queue<Event> s_queue;
+
+// Simple bitfield: isKeyDown per LWJGL key code (max 256), same as PS2's.
+static bool s_keyState[256] = {};
+
+void pushKey(int lwjglKey, bool down)
+{
+	if (lwjglKey >= 0 && lwjglKey < 256)
+		s_keyState[lwjglKey] = down;
+	s_queue.push({lwjglKey, 0, down});
+}
+
+void pushChar(int character)
+{
+	s_queue.push({KEY_NONE, character, true});
+}
+
+} // namespace detail
 
 jstring getKeyName(int_t key)
 {
@@ -26,18 +58,30 @@ jstring getKeyName(int_t key)
 
 static bool s_repeatEvents = false;
 
-bool next() { return false; }
+bool next()
+{
+	if (detail::s_queue.empty())
+		return false;
+	detail::s_current = detail::s_queue.front();
+	detail::s_queue.pop();
+	return true;
+}
 
 void enableRepeatEvents(bool repeat) { s_repeatEvents = repeat; }
 bool areRepeatEventsEnabled()        { return s_repeatEvents; }
 
-char_t getEventCharacter() { return 0; }
-int_t  getEventKey()       { return KEY_NONE; }
-bool   getEventKeyState()  { return false; }
+char_t getEventCharacter() { return (char_t)detail::s_current.character; }
+int_t  getEventKey()       { return detail::s_current.key; }
+bool   getEventKeyState()  { return detail::s_current.down; }
 
 void poll() {}
 
-bool isKeyDown(int_t) { return false; }
+bool isKeyDown(int_t key)
+{
+	if (key < 0 || key >= 256)
+		return false;
+	return detail::s_keyState[key];
+}
 
 } // namespace Keyboard
 } // namespace lwjgl
