@@ -187,7 +187,15 @@
 #endif
 
 #ifndef PLATFORM_HAS_VIRTUAL_KEYBOARD
-#  define PLATFORM_HAS_VIRTUAL_KEYBOARD (PLATFORM_PS2 || PLATFORM_WII)
+// DSi needs this for the same reason PS2/WII do -- no physical keyboard,
+// text entry (world names, seeds) goes through VirtualKeyboard.cpp's
+// on-screen grid instead. Missing here left EntityRenderer.cpp's render
+// call compiled out entirely: VirtualKeyboard::instance().isActive() could
+// become true (LegacyCreateWorldScreen.cpp's auto-focus fix made that part
+// work), the field's tick()/input handling still ran, but nothing ever
+// drew it -- the on-screen result was indistinguishable from "the keyboard
+// never opens", the exact real-hardware report this was chasing.
+#  define PLATFORM_HAS_VIRTUAL_KEYBOARD (PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI)
 #endif
 
 #ifndef PLATFORM_SIMPLE_TRANSPARENT_TERRAIN
