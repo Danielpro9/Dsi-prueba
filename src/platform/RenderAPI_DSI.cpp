@@ -1,6 +1,7 @@
 #ifdef DSI_PLATFORM
 
 #include "platform/RenderAPI.h"
+#include "platform/Log.h"
 
 #include <nds.h>
 #include <cstring>
@@ -243,7 +244,19 @@ bool tryUploadPaletted(int name, const DsiTexture& tex, int param)
 		if (index < 0)
 		{
 			if (palette.size() >= 256)
+			{
+				// Diagnostic for the VRAM-exhaustion investigation: items.png/
+				// inventory.png fail to upload at all on real hardware ("texture
+				// VRAM must be full") while gui.png/icons.png/particles.png
+				// palette successfully (64KB each, confirmed by the resident-
+				// texture breakdown already logged elsewhere). Whether those two
+				// specifically overflow this 256-colour budget (forcing the
+				// costlier GL_RGBA fallback, which then may not fit at all) or
+				// hit a different failure was unverified -- this settles it.
+				MC_LOG_WARN("dsi", "palette overflow: %dx%d texture exceeds 255 distinct opaque colours (scanned %u/%u pixels)\n",
+					tex.width, tex.height, (unsigned)i, (unsigned)pixelCount);
 				return false; // More than 255 distinct opaque colours: doesn't fit this format.
+			}
 			index = static_cast<std::int16_t>(palette.size());
 			colorToIndex[color15] = index;
 			palette.push_back(color15);
@@ -255,7 +268,15 @@ bool tryUploadPaletted(int name, const DsiTexture& tex, int param)
 	const int uploaded = glTexImage2D(0, 0, GL_RGB256, tex.width, tex.height, 0,
 		param | GL_TEXTURE_COLOR0_TRANSPARENT, indices.data());
 	if (!uploaded)
+	{
+		// Palette fit (255 colours or fewer), but the GPU still rejected the
+		// upload -- genuine VRAM space exhaustion even at the cheaper 1 byte/
+		// pixel cost, not a colour-count problem. Distinguishing this from the
+		// overflow case above is the point of this diagnostic.
+		MC_LOG_WARN("dsi", "paletted upload rejected: %dx%d, %u colours, GPU out of texture VRAM space\n",
+			tex.width, tex.height, (unsigned)palette.size());
 		return false;
+	}
 
 	glColorTableNtr(palette.size(), palette.data());
 	return true;
