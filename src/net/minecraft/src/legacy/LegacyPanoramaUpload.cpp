@@ -119,9 +119,21 @@ std::unique_ptr<BufferedImage> legacyPreparePanoramaForUpload(
 	// of-two, purely decorative image (explicitly flagged as such --
 	// legacyUiTitleResourcePath()'s own "hardcoded badd" comment), so it
 	// needs the identical treatment, not a second copy of it.
+	// Real-hardware confirmation (the one-shot RenderEngine.cpp texture-upload
+	// warning added specifically to answer this): /legacy/logo1.png and
+	// /legacy/logo2.png -- the two "OptiCraft Heritage Edition" startup splash
+	// images StartupPresentation.cpp's playLegacyLogo() draws full-screen,
+	// once each, via drawFullscreenTexture() -- fail this same power-of-two
+	// upload check too. Lower-severity than panorama/title (each is bound
+	// once per boot, not once per menu frame, so this was never a sustained
+	// per-frame cost), but the visible result is the same class of bug: a
+	// blank/white splash screen instead of the actual logo. Same treatment
+	// applies cleanly since these are also simple decorative full-screen
+	// draws, not tile atlases whose UV math depends on exact pixel dimensions.
 	const bool isDsiLegacyDecorativeTexture =
 #if defined(DSI_PLATFORM)
-		name == "/legacy/panorama.png" || name == legacyUiTitleResourcePath();
+		name == "/legacy/panorama.png" || name == legacyUiTitleResourcePath() ||
+		name == "/legacy/logo1.png" || name == "/legacy/logo2.png";
 #else
 		name == "/legacy/panorama.png";
 #endif

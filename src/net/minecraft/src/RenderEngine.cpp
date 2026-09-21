@@ -340,6 +340,14 @@ bool RenderEngine::loadTextureInto(const std::string &s, int_t texture, bool app
 	return loadTextureStreamInto(s, texture, inputstream, applyResidencyPolicy);
 }
 
+#if PLATFORM_DSI
+namespace
+{
+int g_dsiLastDecodedWidth = 0;
+int g_dsiLastDecodedHeight = 0;
+}
+#endif
+
 bool RenderEngine::loadTextureStreamInto(const std::string &s, int_t texture, std::istream *inputstream, bool applyResidencyPolicy)
 {
 	PlatformLoadWorkScope textureWork(PlatformLoadWork::TextureLoad);
@@ -390,6 +398,16 @@ bool RenderEngine::loadTextureStreamInto(const std::string &s, int_t texture, st
 		}
 #endif
 		loaded = (bool)image;
+#if PLATFORM_DSI
+		// Captured so getTexture()'s upload-failure warning below can name the
+		// actual pixel dimensions, not just the resource path. Tile atlases
+		// (terrain.png, gui/items.png) can't get the panorama/title/logo
+		// bilinear-resize treatment above -- their UV math depends on exact
+		// pixel positions -- so knowing the real size they shipped at is the
+		// next thing needed to fix them correctly instead of guessing.
+		g_dsiLastDecodedWidth = image ? image->getWidth() : 0;
+		g_dsiLastDecodedHeight = image ? image->getHeight() : 0;
+#endif
 		// setupTexture() reads clampTexture/blurTexture to pick GL_CLAMP/GL_LINEAR, so it MUST run
 		// while the flags are still set; reset them AFTER (as Java does), not inside the branch above.
 		BufferedImage *uploadImage = image ? image.get() : missingTextureImage.get();
@@ -657,7 +675,8 @@ int_t RenderEngine::getTexture(const std::string &s)
 		// logging-perf mistake already made and reverted once this session.
 		static std::set<std::string> s_dsiWarnedTextures;
 		if (s_dsiWarnedTextures.insert(s).second)
-			MC_LOG_WARN("dsi", "texture '%s' failed to upload (likely not power-of-two); retrying every bind\n", s.c_str());
+			MC_LOG_WARN("dsi", "texture '%s' (%dx%d) failed to upload (likely not power-of-two); retrying every bind\n",
+				s.c_str(), g_dsiLastDecodedWidth, g_dsiLastDecodedHeight);
 #endif
 		int_t name = texture;
 		renderDeleteTextures(1, &name);
