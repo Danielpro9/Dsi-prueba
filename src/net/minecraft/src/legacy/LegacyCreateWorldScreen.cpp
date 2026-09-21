@@ -105,23 +105,9 @@ void LegacyCreateWorldScreen::initGui()
     updateDifficultyControl();
     updateControlVisibility();
     selectControl(0);
-#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
+#if PLATFORM_PS2 || PLATFORM_WII
     // Preserve the console's existing initial text-entry behavior. Once the user
     // closes the keyboard, focus stays off until row 0 is activated again.
-    //
-    // DSi has to be here for the same reason PS2 is, not just parity: this
-    // screen's only OTHER way to focus the field is activateSelection(),
-    // reached from a pointer hovering row 0 (mouseClicked()/
-    // updatePointerHover()) or from pressing Enter on a DIFFERENT row while
-    // targetIndex resolves to 0 -- and DSi has no menu pointer/cursor wired
-    // up at all (platformMenuPointerActive() is Wii-only; DSi's
-    // platformMenuCursorVisible() always returns false), and pressing Enter
-    // while ALREADY on row 0 calls moveSelection(1) instead, moving off it.
-    // So without this, the world-name field could never be focused by any
-    // input this platform has -- VirtualKeyboard::isActive() (gated on a
-    // focused GuiTextField) would never become true, matching the real-
-    // hardware report of "Create New World" never opening the keyboard at
-    // all, not just failing to render it.
     textboxWorldName->setFocused(true);
 #endif
 }
