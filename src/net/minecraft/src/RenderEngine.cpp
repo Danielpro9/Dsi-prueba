@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 
 #include "Block.h"
@@ -638,6 +639,26 @@ int_t RenderEngine::getTexture(const std::string &s)
 	if (!textureValid)
 	{
 		MC_LOG_DEBUG("render", "getTexture('%s'): upload failed, will retry next bind\n", s.c_str());
+#if PLATFORM_DSI
+		// DSi's GPU requires exact power-of-two texture dimensions
+		// (RenderAPI_DSI.cpp's uploadTexture()). A texture that fails that
+		// check on its very first load is never inserted into textureMap at
+		// all (see the comment above), so it silently redoes the full SD
+		// decode+upload on EVERY single call to getTexture() for the rest of
+		// the run -- exactly the bug already found and fixed for
+		// /legacy/title.png, which cost ~1-2s of every menu frame until it
+		// was caught. MC_LOG_DEBUG above never reaches the log at this
+		// platform's shipped MC_LOG_LEVEL=1, so this failure mode was
+		// otherwise completely invisible -- the only way it showed up at all
+		// was as an unexplained per-frame cost in GuiMainMenu.cpp's timing
+		// breakdown. Logged once per resource name, not every call:
+		// MC_LOG_SYNC_WRITES=1 makes every MC_LOG_WARN a synchronous SD card
+		// commit, and calling this unconditionally would repeat the exact
+		// logging-perf mistake already made and reverted once this session.
+		static std::set<std::string> s_dsiWarnedTextures;
+		if (s_dsiWarnedTextures.insert(s).second)
+			MC_LOG_WARN("dsi", "texture '%s' failed to upload (likely not power-of-two); retrying every bind\n", s.c_str());
+#endif
 		int_t name = texture;
 		renderDeleteTextures(1, &name);
 		return texture;

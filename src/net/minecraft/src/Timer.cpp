@@ -61,12 +61,22 @@ void Timer::updateTimer()
 	elapsedPartialTicks += d1 * (double)timerSpeed * (double)ticksPerSecond;
 	elapsedTicks = JavaArithmetic::floatToInt(elapsedPartialTicks);
 	elapsedPartialTicks -= elapsedTicks;
-#if defined(PS2_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(DSI_PLATFORM)
 	// Vanilla can try to catch up by running up to 10 game ticks in one rendered
-	// frame. On PS2 that creates a death spiral while chunks/worldgen are slow:
-	// one long frame queues 10 expensive ticks, those ticks make the next frame
-	// even longer, and the player sees multi-second freezes. Prefer temporary
-	// slow-motion over unbounded catch-up stalls.
+	// frame. On PS2 (and, real-hardware data just showed, DSi) that creates a
+	// death spiral: one long frame -- e.g. Display_dsi.cpp's heartbeat doing a
+	// synchronous SD card commit, or any other stall not itself counted as
+	// tick/render time -- queues up to 10 ticks, and if even one of those
+	// ticks is expensive (RenderEngine::updateDynamicTextures() has been
+	// measured spiking past a second on this hardware) their sum lands
+	// entirely inside the NEXT frame's "tick" time, making that frame even
+	// longer and queuing more catch-up ticks after it. GuiMainMenu.cpp's own
+	// [dsi.perf] breakdown showed exactly this shape: an average tick cost of
+	// a few hundred ms next to a per-window MAX up in the multiple seconds,
+	// with no single named sub-phase (stats/mouseOver/dynTex) anywhere near
+	// that maximum on its own -- consistent with several of those ticks
+	// bunching into one frame, not any one of them actually taking that long.
+	// Prefer temporary slow-motion over unbounded catch-up stalls, same as PS2.
 	if (elapsedTicks > 1)
 	{
 		elapsedTicks = 1;
