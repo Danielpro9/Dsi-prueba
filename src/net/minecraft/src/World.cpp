@@ -3660,7 +3660,32 @@ void World::updateEntityWithOptionalForce(Entity* entity, bool flag)
     {
         entity->rotationYaw = entity->prevRotationYaw;
     }
-    
+#if PLATFORM_DSI
+    // This function already repairs posX/posY/posZ/rotation from NaN/Inf by
+    // falling back to last-tick values -- but it never touched boundingBox,
+    // which real-hardware logs show is what actually goes bad (motionX/
+    // motionZ and posX/posY/posZ often stay perfectly finite the whole time).
+    // Once the box alone is NaN, every future sweep/collision call keeps
+    // consuming and re-emitting NaN forever: posX gets reset here every tick
+    // (matching the "frozen in place" symptom), but the box that all
+    // collision math actually reads never recovers on its own. Rebuilding it
+    // from the now-guaranteed-finite posX/posY/posZ (setPosition() recomputes
+    // every bound from width/height/yOffset/ySize, ignoring whatever was
+    // there before) is the same repair-from-last-known-good idea already
+    // used above, extended to the field that was actually missing it. This
+    // does not explain why the box went bad in the first place -- that is
+    // still being tracked down separately -- but it stops one bad tick from
+    // being a permanent, unrecoverable freeze.
+    if (!std::isfinite(entity->boundingBox->minX) || !std::isfinite(entity->boundingBox->maxX) ||
+        !std::isfinite(entity->boundingBox->minY) || !std::isfinite(entity->boundingBox->maxY) ||
+        !std::isfinite(entity->boundingBox->minZ) || !std::isfinite(entity->boundingBox->maxZ))
+    {
+        MC_LOG_WARN("dsi", "World::updateEntityWithOptionalForce: rebuilding non-finite boundingBox for %s posX=%.3f posY=%.3f posZ=%.3f\n",
+            typeid(*entity).name(), entity->posX, entity->posY, entity->posZ);
+        entity->setPosition(entity->posX, entity->posY, entity->posZ);
+    }
+#endif
+
     int k = MathHelper::floor_double(entity->posX / 16.0);
     int l = MathHelper::floor_double(entity->posY / 16.0);
     int i1 = MathHelper::floor_double(entity->posZ / 16.0);

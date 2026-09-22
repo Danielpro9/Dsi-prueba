@@ -765,6 +765,26 @@ void Entity::moveEntity(double d, double d1, double d2)
 			}
 		}
 	}
+#if PLATFORM_DSI
+	// Fall-through diagnostic, next iteration: World::updateEntities()'s new
+	// per-entity check (added last round) proved the box corruption happens
+	// somewhere INSIDE the player's own moveEntity() call, on the same tick
+	// that call runs -- not in some other entity, not in world tick, not in
+	// rendering. moveEntity()'s own entry check (top of this function)
+	// stayed clean for that exact tick, so whatever happens, happens after
+	// entry. This function's own logic between entry and here has exactly
+	// one place that can rewrite `d`/`d2` before the sweep ever sees them:
+	// the onGround-and-sneaking edge-search loops just above (only taken
+	// when isPlayer() && onGround && isSneaking()). Check here, right
+	// before the sweep/collision-apply machinery that actually writes
+	// boundingBox, to bisect "broke in the sneak-edge search" from "broke
+	// in the sweep itself".
+	if (isPlayer() && (!std::isfinite(d) || !std::isfinite(d2)))
+	{
+		MC_LOG_WARN("dsi", "moveEntity: d/d2 already non-finite before sweep ticksExisted=%d d=%.6f d2=%.6f isSneaking=%d onGround=%d flag=%d isInWeb=%d\n",
+			(int)ticksExisted, d, d2, (int)isSneaking(), (int)onGround, (int)flag, (int)isInWeb);
+	}
+#endif
 #if PLATFORM_FLOAT_COLLISION_SWEEP
 	// Same statement order as the double path below, including where flag1 is
 	// sampled (before the X reset can zero d1); see the sweep helpers above.
