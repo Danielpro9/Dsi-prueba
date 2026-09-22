@@ -2021,6 +2021,31 @@ void Minecraft::runTick()
             clientPhaseStartNs = System::nanoTime();
             theWorld->updateEntities();
             ClientProfiler::tickPhase("entities", System::nanoTime() - clientPhaseStartNs);
+#if PLATFORM_DSI
+            // Fall-through diagnostic, next iteration: the render pass is now ruled
+            // out (bracketed last round, its own post-render check never fired,
+            // while the pre-render check kept catching the box already broken).
+            // The last log also showed the player's OWN tick (EntityPlayerSP entry,
+            // moveEntity transition) staying clean the tick corruption first became
+            // visible -- meaning it happens after the player's own update but still
+            // inside that same runTick() call. theWorld->updateEntities() ticks
+            // every entity, not just the player; if something ticked AFTER the
+            // player in that same call is the culprit, it will already show up
+            // right here.
+            if (thePlayer != nullptr)
+            {
+                static bool s_dsiAfterEntitiesWasFinite = true;
+                const bool dsiFiniteAfterEntities = std::isfinite(thePlayer->motionX) && std::isfinite(thePlayer->motionZ) &&
+                    std::isfinite(thePlayer->boundingBox->minX) && std::isfinite(thePlayer->boundingBox->minZ);
+                if (!dsiFiniteAfterEntities && s_dsiAfterEntitiesWasFinite)
+                {
+                    MC_LOG_WARN("dsi", "Minecraft::runTick: ALREADY non-finite right after updateEntities() ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
+                        (int)thePlayer->ticksExisted, thePlayer->motionX, thePlayer->motionZ,
+                        thePlayer->boundingBox->minX, thePlayer->boundingBox->minZ);
+                }
+                s_dsiAfterEntitiesWasFinite = dsiFiniteAfterEntities;
+            }
+#endif
         }
         if (!isGamePaused || isMultiplayerWorld())
         {
@@ -2028,6 +2053,25 @@ void Minecraft::runTick()
             clientPhaseStartNs = System::nanoTime();
             theWorld->tick();
             ClientProfiler::tickPhase("worldTick", System::nanoTime() - clientPhaseStartNs);
+#if PLATFORM_DSI
+            // Same idea, one phase later: theWorld->tick() runs block ticks, random
+            // ticks, weather, mob spawning -- none of it should touch the player's
+            // own fields, but if updateEntities() above stays clean and this still
+            // catches it, the culprit is somewhere in here instead.
+            if (thePlayer != nullptr)
+            {
+                static bool s_dsiAfterWorldTickWasFinite = true;
+                const bool dsiFiniteAfterWorldTick = std::isfinite(thePlayer->motionX) && std::isfinite(thePlayer->motionZ) &&
+                    std::isfinite(thePlayer->boundingBox->minX) && std::isfinite(thePlayer->boundingBox->minZ);
+                if (!dsiFiniteAfterWorldTick && s_dsiAfterWorldTickWasFinite)
+                {
+                    MC_LOG_WARN("dsi", "Minecraft::runTick: ALREADY non-finite right after theWorld->tick() ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
+                        (int)thePlayer->ticksExisted, thePlayer->motionX, thePlayer->motionZ,
+                        thePlayer->boundingBox->minX, thePlayer->boundingBox->minZ);
+                }
+                s_dsiAfterWorldTickWasFinite = dsiFiniteAfterWorldTick;
+            }
+#endif
         }
         if (!isGamePaused && theWorld != nullptr)
         {

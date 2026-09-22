@@ -1572,7 +1572,43 @@ void EntityLiving::onLivingUpdate()
 	randomYawVelocity *= 0.9f;
 	const float previousLandMovementFactor = landMovementFactor;
 	landMovementFactor *= getSpeedModifier();
+#if PLATFORM_DSI
+	// User report: sometimes the world is solid (no fall-through) but the
+	// player still cannot move with the D-pad, while jump/inventory/block-
+	// breaking/interact all keep working. Most likely the same X/Z-only
+	// boundingBox corruption this whole investigation is chasing -- Y stays
+	// valid so the player looks like they are standing normally, while X/Z
+	// being NaN freezes horizontal position no matter what moveStrafing/
+	// moveForward say. Confirm directly: if there is real movement input
+	// this tick, log whether position actually changed and whether the box
+	// is finite at that moment, throttled to once every ~10 stuck ticks so a
+	// genuinely stuck player does not spam the log.
+	const bool dsiHasMoveInput = isPlayer() && (std::abs(moveStrafing) > 0.05f || std::abs(moveForward) > 0.05f);
+	const double dsiPosXBeforeMove = posX;
+	const double dsiPosZBeforeMove = posZ;
+#endif
 	moveEntityWithHeading(moveStrafing, moveForward);
+#if PLATFORM_DSI
+	if (dsiHasMoveInput)
+	{
+		static int_t s_dsiStuckLogTicks = 0;
+		const bool dsiPositionFrozen = (posX == dsiPosXBeforeMove) && (posZ == dsiPosZBeforeMove);
+		if (dsiPositionFrozen)
+		{
+			if (++s_dsiStuckLogTicks >= 10)
+			{
+				s_dsiStuckLogTicks = 0;
+				const bool dsiBoxFinite = std::isfinite(boundingBox->minX) && std::isfinite(boundingBox->minZ);
+				MC_LOG_WARN("dsi", "onLivingUpdate: move input present but position frozen ticksExisted=%d moveStrafing=%.3f moveForward=%.3f posX=%.3f posZ=%.3f boxFinite=%d onGround=%d\n",
+					(int)ticksExisted, (double)moveStrafing, (double)moveForward, posX, posZ, (int)dsiBoxFinite, (int)onGround);
+			}
+		}
+		else
+		{
+			s_dsiStuckLogTicks = 0;
+		}
+	}
+#endif
 	landMovementFactor = previousLandMovementFactor;
 #if PLATFORM_LIMIT_ENTITY_PUSH_COLLISIONS
 	if (!isEntityPushCollisionRelevant(this))

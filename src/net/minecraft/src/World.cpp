@@ -31,6 +31,7 @@
 #include <limits>
 #include <algorithm>
 #include <cmath>
+#include <typeinfo>
 #include <unordered_set>
 #include <vector>
 #if PLATFORM_RANDOM_TICK_PROFILE_INTERVAL > 0
@@ -3377,6 +3378,32 @@ void World::updateEntities()
             updateEntity(entity);
 #if PLATFORM_PS2 && MC_LOG_LEVEL > 2
             platformProfileEntityTick(entityTickStart, entity);
+#endif
+#if PLATFORM_DSI
+            // Fall-through diagnostic, next iteration: the corruption has been
+            // narrowed to somewhere between the player's own tick finishing and
+            // the end of this same runTick() call, with the render pass already
+            // ruled out. This loop ticks EVERY loaded entity (the player is just
+            // one entry in loadedEntityList, ticked through this exact same
+            // updateEntity() call like everything else) -- if something ticked
+            // AFTER the player here is the culprit, checking right after each
+            // entity's own tick pins down exactly which one by class name,
+            // instead of just "somewhere in updateEntities()".
+            if (!playerEntities.empty() && playerEntities[0] != nullptr)
+            {
+                EntityPlayer *dsiPlayer = playerEntities[0];
+                static bool s_dsiEntityLoopWasFinite = true;
+                const bool dsiFiniteNow = std::isfinite(dsiPlayer->motionX) && std::isfinite(dsiPlayer->motionZ) &&
+                    std::isfinite(dsiPlayer->boundingBox->minX) && std::isfinite(dsiPlayer->boundingBox->minZ);
+                if (!dsiFiniteNow && s_dsiEntityLoopWasFinite)
+                {
+                    MC_LOG_WARN("dsi", "World::updateEntities: player non-finite right after ticking %s (isPlayerItself=%d) ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
+                        typeid(*entity).name(), (int)(entity == static_cast<Entity *>(dsiPlayer)),
+                        (int)dsiPlayer->ticksExisted, dsiPlayer->motionX, dsiPlayer->motionZ,
+                        dsiPlayer->boundingBox->minX, dsiPlayer->boundingBox->minZ);
+                }
+                s_dsiEntityLoopWasFinite = dsiFiniteNow;
+            }
 #endif
         }
         
