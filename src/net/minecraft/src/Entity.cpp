@@ -395,6 +395,22 @@ void Entity::setPosition(double d, double d1, double d2)
 	posZ = d2;
 	float f = width / 2.0f;
 	float f1 = height;
+#if PLATFORM_DSI
+	// Diagnostic for the fall-through-the-floor investigation: the real-hardware
+	// sweepY log ("sweepBoxes=0", NaN in the sweep's local X/Z extents while Y
+	// stays a normal number) points at boundingBox's X/Z specifically being
+	// corrupted, not the block data (already confirmed loaded and solid by the
+	// existing "falling:" diagnostic). boundingBox's X/Z is built from `width`
+	// here and nowhere else, so if this is ever NaN/non-finite, this is the
+	// exact moment and call site it entered -- isPlayer() only, unthrottled
+	// (setPosition() on a player is not a hot per-frame call the way tick-loop
+	// code is).
+	if (isPlayer() && (!std::isfinite(width) || !std::isfinite(d) || !std::isfinite(d2)))
+	{
+		MC_LOG_WARN("dsi", "setPosition NaN: d=%.3f d1=%.3f d2=%.3f width=%.3f height=%.3f yOffset=%.3f ySize=%.3f ticksExisted=%d\n",
+			d, d1, d2, (double)width, (double)height, (double)yOffset, (double)ySize, (int)ticksExisted);
+	}
+#endif
 	boundingBox->setBounds(d - (double)f, (d1 - (double)yOffset) + (double)ySize, d2 - (double)f,
 	                       d + (double)f, (d1 - (double)yOffset) + (double)ySize + (double)f1, d2 + (double)f);
 }
