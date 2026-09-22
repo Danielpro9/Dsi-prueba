@@ -691,9 +691,10 @@ void Entity::moveEntity(double d, double d1, double d2)
 			&& std::isfinite(boundingBox->maxX) && std::isfinite(boundingBox->maxZ);
 		if (nowFinite != s_boxWasFinite)
 		{
-			MC_LOG_WARN("dsi", "moveEntity boundingBox finite-state changed: nowFinite=%d ticksExisted=%d posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f requestedD=%.6f requestedD2=%.6f onGround=%d minX=%.3f maxX=%.3f minZ=%.3f maxZ=%.3f lastXWrite=%s lastZWrite=%s\n",
+			MC_LOG_WARN("dsi", "moveEntity boundingBox finite-state changed: nowFinite=%d ticksExisted=%d posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f requestedD=%.6f requestedD2=%.6f onGround=%d minX=%.3f maxX=%.3f minZ=%.3f maxZ=%.3f lastXWrite=%s lastZWrite=%s rotationYaw=%.6f prevRotationYaw=%.6f width=%.6f\n",
 				(int)nowFinite, (int)ticksExisted, posX, posZ, motionX, motionZ, d, d2, (int)onGround,
-				boundingBox->minX, boundingBox->maxX, boundingBox->minZ, boundingBox->maxZ, g_dsiLastXWrite, g_dsiLastZWrite);
+				boundingBox->minX, boundingBox->maxX, boundingBox->minZ, boundingBox->maxZ, g_dsiLastXWrite, g_dsiLastZWrite,
+				(double)rotationYaw, (double)prevRotationYaw, (double)width);
 			s_boxWasFinite = nowFinite;
 		}
 	}
