@@ -15,6 +15,9 @@
 #include "AchievementList.h"
 #include "AxisAlignedBB.h"
 #include "EntityPickupFX.h"
+#include "platform/Log.h"
+#include "platform/PlatformTuning.h"
+#include <cmath>
 #include "EntityCrit2FX.h"
 #include "GuiChest.h"
 #include "GuiCrafting.h"
@@ -83,6 +86,28 @@ void EntityPlayerSP::updatePlayerActionState()
 
 void EntityPlayerSP::onLivingUpdate()
 {
+#if PLATFORM_DSI
+	// Fall-through diagnostic, next iteration: every check placed in
+	// EntityLiving::onLivingUpdate()/moveEntityWithHeading() and in
+	// Entity::addVelocity() has come back clean across many real-hardware
+	// repros, ruling out everything from EntityPlayer::onLivingUpdate()
+	// onward. Those checks never cover this function's own body, though --
+	// EntityPlayerSP overrides onLivingUpdate() and runs ~140 lines of
+	// portal/sprint/fly bookkeeping and four pushOutOfBlocks() calls (which
+	// write motionX/motionZ directly, bypassing addVelocity() entirely)
+	// before calling EntityPlayer::onLivingUpdate() at all -- a code region
+	// no prior round has instrumented. Bracket it the same way: latched
+	// entry/pre-base-call checks against both motion and the box itself,
+	// since a corruption event has shown up in either one independently.
+	const bool dsiFiniteAtSPEntry = std::isfinite(motionX) && std::isfinite(motionZ) &&
+		std::isfinite(boundingBox->minX) && std::isfinite(boundingBox->minZ);
+	static bool s_dsiSPWasFinite = true;
+	if (!dsiFiniteAtSPEntry && s_dsiSPWasFinite)
+	{
+		MC_LOG_WARN("dsi", "EntityPlayerSP::onLivingUpdate: ALREADY non-finite at entry ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
+			(int)ticksExisted, motionX, motionZ, boundingBox->minX, boundingBox->minZ);
+	}
+#endif
 	if (sprintingTicksLeft > 0)
 	{
 		--sprintingTicksLeft;
@@ -225,6 +250,20 @@ void EntityPlayerSP::onLivingUpdate()
 			motionY += 0.15;
 	}
 
+#if PLATFORM_DSI
+	if (dsiFiniteAtSPEntry && s_dsiSPWasFinite)
+	{
+		const bool dsiFiniteBeforeBase = std::isfinite(motionX) && std::isfinite(motionZ) &&
+			std::isfinite(boundingBox->minX) && std::isfinite(boundingBox->minZ);
+		if (!dsiFiniteBeforeBase)
+		{
+			MC_LOG_WARN("dsi", "EntityPlayerSP::onLivingUpdate: became non-finite in pre-base block ticksExisted=%d posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f isFlying=%d inPortal=%d\n",
+				(int)ticksExisted, posX, posZ, motionX, motionZ, boundingBox->minX, boundingBox->minZ,
+				(int)capabilities.isFlying, (int)inPortal);
+		}
+		s_dsiSPWasFinite = dsiFiniteBeforeBase;
+	}
+#endif
 	EntityPlayer::onLivingUpdate();
 	if (onGround && capabilities.isFlying)
 	{
