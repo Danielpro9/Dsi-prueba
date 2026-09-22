@@ -52,6 +52,14 @@
 #include "World.h"
 #include "WorldProvider.h"
 
+#if PLATFORM_DSI
+// See Entity.cpp's g_dsiKnownPlayerPtrs/dsiRegisterPlayerEntity comment: this
+// object's own constructor is the reliable place to remember "this is a
+// player" for the ~Entity() diagnostic, since isPlayer() cannot be trusted
+// once destruction reaches the base class.
+void dsiRegisterPlayerEntity(const void* ptr);
+#endif
+
 namespace
 {
 #if defined(PS2_PLATFORM) || defined(WII_PLATFORM) || defined(DSI_PLATFORM)
@@ -72,6 +80,9 @@ namespace
 EntityPlayer::EntityPlayer(World *world)
 	: EntityLiving(world)
 {
+#if PLATFORM_DSI
+	dsiRegisterPlayerEntity(this);
+#endif
 	inventory = new InventoryPlayer(this);
 	field_9371_f = 0;
 	score = 0;

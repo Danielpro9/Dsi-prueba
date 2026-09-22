@@ -46,6 +46,37 @@ int_t Entity::nextEntityID = 0;
 // a Y-only write can no longer mask the real culprit.
 const char* g_dsiLastXWrite = "none";
 const char* g_dsiLastZWrite = "none";
+
+// Fall-through diagnostic, next iteration: every write-site and per-tick
+// checkpoint diagnostic added so far has stayed clean despite repeated
+// corruption (motionX/motionZ NaN, and now noClip=true) with no legitimate
+// writer anywhere in this codebase -- pointing at memory corruption rather
+// than a movement-code bug. One mechanism that would produce exactly this
+// symptom without ever touching any instrumented write site: a dangling
+// pointer to the OLD player entity Minecraft::respawn() marks dead
+// (World::setEntityDead()) but does not immediately delete -- deletion is
+// deferred to a later entity-list cleanup pass, once
+// deleteWorldOwnedEntity()'s isActiveClientEntity() guard (checked against
+// mc->thePlayer/mc->renderViewEntity) no longer protects it, since respawn
+// has already reassigned those to the new player object by then. If
+// anything still holds and uses a raw pointer to that old object after it
+// is actually deleted, writes through it land in whatever the allocator
+// gave that freed block to next -- plausibly the new player object itself,
+// created moments earlier and likely nearby in a small heap. Track the
+// last few constructed EntityPlayer pointers (set from EntityPlayer's own
+// constructor, not a virtual call, since isPlayer() is unreliable this
+// late/early in an object's lifetime -- see the ~Entity() comment below)
+// and flag ~Entity() specifically when it is destroying one of them, to
+// see whether a dead old player's destruction lines up with the tick a
+// corruption is next observed.
+const void* g_dsiKnownPlayerPtrs[4] = { nullptr, nullptr, nullptr, nullptr };
+
+void dsiRegisterPlayerEntity(const void* ptr)
+{
+	for (int i = 3; i > 0; --i)
+		g_dsiKnownPlayerPtrs[i] = g_dsiKnownPlayerPtrs[i - 1];
+	g_dsiKnownPlayerPtrs[0] = ptr;
+}
 #endif
 
 namespace
@@ -333,6 +364,22 @@ Entity::Entity(World *world) :
 
 Entity::~Entity()
 {
+#if PLATFORM_DSI
+	// isPlayer() is a virtual call and this late in destruction the derived
+	// EntityPlayer part of the object may already be torn down, so it cannot
+	// be trusted to identify a player here -- check this object's address
+	// against the last few EntityPlayer constructor calls instead (see the
+	// comment by g_dsiKnownPlayerPtrs above).
+	for (const void* ptr : g_dsiKnownPlayerPtrs)
+	{
+		if (ptr == static_cast<const void*>(this))
+		{
+			MC_LOG_WARN("dsi", "~Entity: destroying a known player entity this=%p entityId=%d isDead=%d ticksExisted=%d\n",
+				static_cast<const void*>(this), (int)entityId, (int)isDead, (int)ticksExisted);
+			break;
+		}
+	}
+#endif
 	delete dataWatcher;
 	// boundingBox now points at boundingBoxStorage (owned inline) — nothing to free.
 }
