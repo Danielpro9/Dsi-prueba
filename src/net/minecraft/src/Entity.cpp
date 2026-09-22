@@ -33,23 +33,19 @@
 int_t Entity::nextEntityID = 0;
 
 #if PLATFORM_DSI
-// Fall-through diagnostic, next iteration: the moveEntity()-entry NaN check
-// caught the transition (ticksExisted=24, onGround=1, zero motion, boundingBox
-// already NaN walking in), which rules out every write inside moveEntity()
-// itself for THAT specific tick -- none of them should even run with all-zero
-// deltas (sweepApplyX/Y/Z all early-return on d==0.0, and the step-up block
-// requires an actual requested-vs-resolved difference that can't happen from
-// an all-zero request). So the corruption most likely happened on a PRIOR
-// tick, in one of the several places that write boundingBox's fields
-// directly: setPosition(), the three sweepApplyX/Y/Z helpers below, or either
-// of moveEntity()'s two boundingBox->setBB() restores (the step-up attempt's
-// restore-to-pre-step, and its restore-to-post-first-resolution when the step
-// did not help). A last-writer tag, updated at each of those sites and
-// printed alongside the existing finite-state-changed line, will name the
-// exact one that ran most recently before the NaN was observed -- direct
-// evidence instead of reasoning about which of several plausible-looking
-// sites it must be.
-const char* g_dsiLastBoundingBoxWrite = "none";
+// Fall-through diagnostic, next iteration: the first version of this tag was
+// a single g_dsiLastBoundingBoxWrite shared across all six write sites. That
+// round's real-hardware log came back with lastWrite=sweepApplyY at the
+// moment minX/maxX/minZ/maxZ were observed NaN -- but sweepApplyY only ever
+// touches minY/maxY, never X or Z. The player was falling straight down
+// (motionX=motionZ=0), so sweepApplyX/sweepApplyZ kept early-returning
+// (d==0.0) every tick while sweepApplyY kept running and overwriting the one
+// shared tag each tick, silently hiding whichever site last actually touched
+// X/Z -- possibly many ticks earlier. Split into two axis-specific tags
+// (X and Z; Y is never part of the corruption this diagnostic is chasing) so
+// a Y-only write can no longer mask the real culprit.
+const char* g_dsiLastXWrite = "none";
+const char* g_dsiLastZWrite = "none";
 #endif
 
 namespace
@@ -180,7 +176,7 @@ namespace
 		if (clipped)
 			d = sweepExactDelta(d, sweep.originX, face, bounds->minX, bounds->maxX);
 #if PLATFORM_DSI
-		g_dsiLastBoundingBoxWrite = "sweepApplyX";
+		g_dsiLastXWrite = "sweepApplyX";
 #endif
 		bounds->minX += d;
 		bounds->maxX += d;
@@ -204,9 +200,9 @@ namespace
 		const bool clipped = sweepAxisY(sweep, e, (float)d1, face);
 		if (clipped)
 			d1 = sweepExactDelta(d1, sweep.originY, face, bounds->minY, bounds->maxY);
-#if PLATFORM_DSI
-		g_dsiLastBoundingBoxWrite = "sweepApplyY";
-#endif
+		// No X/Z tag here: sweepApplyY only ever touches minY/maxY, and tagging
+		// it anyway is exactly what hid the real culprit last round (see the
+		// comment on g_dsiLastXWrite/g_dsiLastZWrite above).
 		bounds->minY += d1;
 		bounds->maxY += d1;
 		if (clipped)
@@ -230,7 +226,7 @@ namespace
 		if (clipped)
 			d2 = sweepExactDelta(d2, sweep.originZ, face, bounds->minZ, bounds->maxZ);
 #if PLATFORM_DSI
-		g_dsiLastBoundingBoxWrite = "sweepApplyZ";
+		g_dsiLastZWrite = "sweepApplyZ";
 #endif
 		bounds->minZ += d2;
 		bounds->maxZ += d2;
@@ -439,7 +435,8 @@ void Entity::setPosition(double d, double d1, double d2)
 		MC_LOG_WARN("dsi", "setPosition NaN: d=%.3f d1=%.3f d2=%.3f width=%.3f height=%.3f yOffset=%.3f ySize=%.3f ticksExisted=%d\n",
 			d, d1, d2, (double)width, (double)height, (double)yOffset, (double)ySize, (int)ticksExisted);
 	}
-	g_dsiLastBoundingBoxWrite = "setPosition";
+	g_dsiLastXWrite = "setPosition";
+	g_dsiLastZWrite = "setPosition";
 #endif
 	boundingBox->setBounds(d - (double)f, (d1 - (double)yOffset) + (double)ySize, d2 - (double)f,
 	                       d + (double)f, (d1 - (double)yOffset) + (double)ySize + (double)f1, d2 + (double)f);
@@ -619,9 +616,9 @@ void Entity::moveEntity(double d, double d1, double d2)
 			&& std::isfinite(boundingBox->maxX) && std::isfinite(boundingBox->maxZ);
 		if (nowFinite != s_boxWasFinite)
 		{
-			MC_LOG_WARN("dsi", "moveEntity boundingBox finite-state changed: nowFinite=%d ticksExisted=%d posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f requestedD=%.6f requestedD2=%.6f onGround=%d minX=%.3f maxX=%.3f minZ=%.3f maxZ=%.3f lastWrite=%s\n",
+			MC_LOG_WARN("dsi", "moveEntity boundingBox finite-state changed: nowFinite=%d ticksExisted=%d posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f requestedD=%.6f requestedD2=%.6f onGround=%d minX=%.3f maxX=%.3f minZ=%.3f maxZ=%.3f lastXWrite=%s lastZWrite=%s\n",
 				(int)nowFinite, (int)ticksExisted, posX, posZ, motionX, motionZ, d, d2, (int)onGround,
-				boundingBox->minX, boundingBox->maxX, boundingBox->minZ, boundingBox->maxZ, g_dsiLastBoundingBoxWrite);
+				boundingBox->minX, boundingBox->maxX, boundingBox->minZ, boundingBox->maxZ, g_dsiLastXWrite, g_dsiLastZWrite);
 			s_boxWasFinite = nowFinite;
 		}
 	}
@@ -629,7 +626,8 @@ void Entity::moveEntity(double d, double d1, double d2)
 	if (noClip)
 	{
 #if PLATFORM_DSI
-		g_dsiLastBoundingBoxWrite = "noClipOffset";
+		g_dsiLastXWrite = "noClipOffset";
+		g_dsiLastZWrite = "noClipOffset";
 #endif
 		boundingBox->offset(d, d1, d2);
 		posX = (boundingBox->minX + boundingBox->maxX) / 2.0;
@@ -792,7 +790,8 @@ void Entity::moveEntity(double d, double d1, double d2)
 		d2 = d7;
 		AxisAlignedBB *axisalignedbb1 = boundingBox->copy();
 #if PLATFORM_DSI
-		g_dsiLastBoundingBoxWrite = "stepUpRestorePre";
+		g_dsiLastXWrite = "stepUpRestorePre";
+		g_dsiLastZWrite = "stepUpRestorePre";
 #endif
 		boundingBox->setBB(axisalignedbb);
 #if PLATFORM_FLOAT_COLLISION_SWEEP
@@ -871,7 +870,8 @@ void Entity::moveEntity(double d, double d1, double d2)
 			d1 = d11;
 			d2 = d13;
 #if PLATFORM_DSI
-			g_dsiLastBoundingBoxWrite = "stepUpRestorePost";
+			g_dsiLastXWrite = "stepUpRestorePost";
+			g_dsiLastZWrite = "stepUpRestorePost";
 #endif
 			boundingBox->setBB(axisalignedbb1);
 		}
