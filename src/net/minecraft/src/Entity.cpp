@@ -1213,6 +1213,27 @@ void Entity::moveFlying(float f, float f1, float f2)
 	f1 *= f3;
 	float f4 = MathHelper::sin((rotationYaw * 3.1415927f) / 180.0f);
 	float f5 = MathHelper::cos((rotationYaw * 3.1415927f) / 180.0f);
+#if PLATFORM_DSI
+	// Fall-through diagnostic, next iteration: real-hardware logs show d/d2
+	// (copies of motionX/motionZ taken moments later, at moveEntity()'s own
+	// entry) already NaN every tick from the first bad one onward, yet
+	// moveEntityWithHeading()'s own entry/movementFactor/exit checks
+	// (latched, same family as everywhere else in this investigation) never
+	// fire despite motionX/motionZ only ever being written here (this
+	// function early-returns above whenever f3 < 0.01f, i.e. whenever
+	// there is no real movement input -- so this write only runs on an
+	// actual D-pad press, matching the user's own report that the freeze
+	// tracks pressing the D-pad). Deliberately unlatched (logs every
+	// occurrence, not just the first) to sidestep whatever is suppressing
+	// the other checks and pin down directly whether f2 (movementFactor,
+	// which goes to infinity if a block's slipperiness*0.91 cubes to zero
+	// in moveEntityWithHeading) or rotationYaw is already bad walking in.
+	if (isPlayer() && (!std::isfinite(f2) || !std::isfinite(rotationYaw) || !std::isfinite(f4) || !std::isfinite(f5)))
+	{
+		MC_LOG_WARN("dsi", "moveFlying: bad input ticksExisted=%d f=%.6f f1=%.6f f2=%.6f rotationYaw=%.6f f4=%.6f f5=%.6f motionXBefore=%.6f motionZBefore=%.6f\n",
+			(int)ticksExisted, (double)f, (double)f1, (double)f2, (double)rotationYaw, (double)f4, (double)f5, motionX, motionZ);
+	}
+#endif
 	motionX += f * f5 - f1 * f4;
 	motionZ += f1 * f5 + f * f4;
 }

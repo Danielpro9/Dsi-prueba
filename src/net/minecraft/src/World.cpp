@@ -3661,6 +3661,30 @@ void World::updateEntityWithOptionalForce(Entity* entity, bool flag)
         entity->rotationYaw = entity->prevRotationYaw;
     }
 #if PLATFORM_DSI
+    // Real-hardware logs show motionX/motionZ can go NaN and then SELF-
+    // PERPETUATE forever: moveEntityWithHeading()'s own per-tick friction
+    // (`motionX *= f2;`) can only ever turn a finite value into a smaller
+    // finite value or leave a NaN as NaN -- there is no legitimate write in
+    // this codebase that ever brings a NaN motionX back to finite on its
+    // own. Once it goes bad on any one tick, every later tick keeps feeding
+    // that NaN into moveEntity(), which is what the boundingBox repair right
+    // below has to keep undoing every single tick -- posX/posY/posZ get
+    // reset back to the exact same lastTick value forever, which is the
+    // player standing still and permanently unable to move, not falling.
+    // Reset motion the same way position already is: back to zero (not
+    // "last tick's motion", since a NaN motion carries no recoverable
+    // direction/speed to restore) so the next tick's own input can compute
+    // a fresh value from scratch instead of multiplying a poisoned one.
+    if (!std::isfinite(entity->motionX) || !std::isfinite(entity->motionY) || !std::isfinite(entity->motionZ))
+    {
+        MC_LOG_WARN("dsi", "World::updateEntityWithOptionalForce: resetting non-finite motion for %s motionX=%.6f motionY=%.6f motionZ=%.6f\n",
+            typeid(*entity).name(), entity->motionX, entity->motionY, entity->motionZ);
+        entity->motionX = 0.0;
+        entity->motionY = 0.0;
+        entity->motionZ = 0.0;
+    }
+#endif
+#if PLATFORM_DSI
     // This function already repairs posX/posY/posZ/rotation from NaN/Inf by
     // falling back to last-tick values -- but it never touched boundingBox,
     // which real-hardware logs show is what actually goes bad (motionX/

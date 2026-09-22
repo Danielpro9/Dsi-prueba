@@ -4,6 +4,7 @@
 #include "platform/Log.h"
 
 #include <nds.h>
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -224,11 +225,37 @@ void convertRgba8ToDs(const std::uint8_t* src, std::uint16_t* dst, int pixelCoun
 // which always fits and is the last resort.
 enum class PalettedUploadResult { Success, ColorOverflow, SpaceExhausted };
 
+// 4x4 Bayer ordered-dither matrix (values 0..15, i.e. sixteenths of one
+// quantization step). Only used once quantShift > 0 -- a texture that fits
+// the exact 255-colour palette (the common case: gui.png/icons.png/
+// particles.png, and terrain.png/items.png most of the time now that the
+// fire/portal re-upload waste is gone) is never touched by this, so nothing
+// about the normal path changes. Once quantShift kicks in, each channel is
+// rounded down to a multiple of a 2^quantShift step (see channelMask
+// below); without dithering that shows up as visible banding -- flat
+// colour steps instead of a smooth gradient, most noticeable exactly on the
+// large gradient-heavy atlases (terrain.png/items.png) real-hardware logs
+// show hitting shift 2-3 routinely. Biasing each pixel by its position in
+// this fixed 4x4 pattern before truncating spreads that rounding error into
+// a stipple instead of a hard edge -- same total palette size and upload
+// cost (still exactly 1 byte/pixel, still one pass), just a less visually
+// obvious loss.
+constexpr std::uint8_t kBayer4x4[4][4] = {
+	{  0,  8,  2, 10 },
+	{ 12,  4, 14,  6 },
+	{  3, 11,  1,  9 },
+	{ 15,  7, 13,  5 },
+};
+
 PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, int param,
 	int quantShift, std::size_t& outColorCount)
 {
 	const std::size_t pixelCount = static_cast<std::size_t>(tex.width) * tex.height;
 	const std::uint8_t channelMask = static_cast<std::uint8_t>(~((1u << quantShift) - 1u) & 0x1Fu);
+	// Size, in 8-bit channel units, of the step that quantShift will round
+	// away -- the amount kBayer4x4's bias needs to cover so it can push a
+	// pixel into either neighbouring palette level depending on position.
+	const int ditherStep = quantShift > 0 ? (1 << (quantShift + 3)) : 0;
 
 	std::vector<std::int16_t> colorToIndex(32768, -1);
 	std::vector<std::uint16_t> palette;
@@ -246,9 +273,21 @@ PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, i
 			continue;
 		}
 
-		const std::uint8_t r = (src[i * 4 + 0] >> 3) & channelMask;
-		const std::uint8_t g = (src[i * 4 + 1] >> 3) & channelMask;
-		const std::uint8_t b = (src[i * 4 + 2] >> 3) & channelMask;
+		std::uint8_t r8 = src[i * 4 + 0];
+		std::uint8_t g8 = src[i * 4 + 1];
+		std::uint8_t b8 = src[i * 4 + 2];
+		if (ditherStep > 0)
+		{
+			const int x = static_cast<int>(i % static_cast<std::size_t>(tex.width));
+			const int y = static_cast<int>(i / static_cast<std::size_t>(tex.width));
+			const int bias = (kBayer4x4[y & 3][x & 3] * ditherStep) / 16;
+			r8 = static_cast<std::uint8_t>(std::min(255, r8 + bias));
+			g8 = static_cast<std::uint8_t>(std::min(255, g8 + bias));
+			b8 = static_cast<std::uint8_t>(std::min(255, b8 + bias));
+		}
+		const std::uint8_t r = (r8 >> 3) & channelMask;
+		const std::uint8_t g = (g8 >> 3) & channelMask;
+		const std::uint8_t b = (b8 >> 3) & channelMask;
 		const std::uint16_t color15 = static_cast<std::uint16_t>(r | (g << 5) | (b << 10));
 
 		std::int16_t index = colorToIndex[color15];
