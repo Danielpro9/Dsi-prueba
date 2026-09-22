@@ -753,7 +753,40 @@ void EntityLiving::setPositionAndRotation2(double d, double d1, double d2, float
 
 void EntityLiving::onUpdate()
 {
+#if PLATFORM_DSI
+	// Fall-through diagnostic, next iteration: the moveEntityWithHeading()
+	// entry/exit checks added last round never fired on the tick where the
+	// old moveEntity() diagnostic showed motionX/motionZ already NaN --
+	// meaning the corruption is not inside moveEntityWithHeading() at all.
+	// Bracket the other candidate that runs earlier in the same tick:
+	// Entity::onUpdate() (onEntityUpdate() -> handleWaterMovement() ->
+	// World::handleMaterialAcceleration()'s flow-vector normalize(), a
+	// classic 0-length-vector NaN source in vanilla Minecraft) runs BEFORE
+	// onLivingUpdate()/moveEntityWithHeading() in this same function. A
+	// separate latch (independent of moveEntityWithHeading's own) says
+	// whether motion goes bad specifically during that call.
+	const bool dsiTrackTick = isPlayer();
+	const bool dsiFiniteBeforeEntityUpdate = std::isfinite(motionX) && std::isfinite(motionZ);
+	static bool s_dsiMotionWasFiniteTick = true;
+#endif
 	Entity::onUpdate();
+#if PLATFORM_DSI
+	if (dsiTrackTick)
+	{
+		const bool dsiFiniteAfterEntityUpdate = std::isfinite(motionX) && std::isfinite(motionZ);
+		if (dsiFiniteBeforeEntityUpdate && !dsiFiniteAfterEntityUpdate && s_dsiMotionWasFiniteTick)
+		{
+			MC_LOG_WARN("dsi", "EntityLiving::onUpdate: motion became non-finite INSIDE Entity::onUpdate() ticksExisted=%d onGround=%d isInWater=%d\n",
+				(int)ticksExisted, (int)onGround, (int)isInWater());
+		}
+		else if (!dsiFiniteBeforeEntityUpdate && s_dsiMotionWasFiniteTick)
+		{
+			MC_LOG_WARN("dsi", "EntityLiving::onUpdate: motion ALREADY non-finite BEFORE Entity::onUpdate() ticksExisted=%d onGround=%d\n",
+				(int)ticksExisted, (int)onGround);
+		}
+		s_dsiMotionWasFiniteTick = dsiFiniteAfterEntityUpdate;
+	}
+#endif
 	if (arrowHitTempCounter > 0)
 	{
 		if (arrowHitTimer <= 0)
