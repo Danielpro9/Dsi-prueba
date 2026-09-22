@@ -31,13 +31,20 @@ u8* g_heapStart = nullptr;
 // the console the way most PS2 games do too -- there is no background menu it
 // has to coexist with, a soft reset is the way out either way -- so there is
 // less reason to hold back half of it than the original PS2-ratio guess
-// assumed. The remaining 4 MB margin exists for a different reason than "share
-// it with something else": nothing in this port has been profiled on real
-// hardware yet, so it is a cushion against our own bugs (leaks, fragmentation,
-// an unexpectedly large allocation) rather than a design requirement. Once a
-// real run reports actual resident/committed numbers here, this is the
-// constant to move -- up toward ~15 MB if headroom holds, back toward 8 MB if
-// the port turns out to be unstable near the ceiling.
+// assumed.
+//
+// Raised again, 12 -> 15 MB, once real hardware finally reported actual
+// numbers: a debug.log heartbeat trace covering normal single-player
+// exploration (chunk loads, a death/respawn cycle, several minutes of play)
+// peaked at ~8059/12288 KB -- comfortably under the old ceiling the whole
+// time, let alone the full 16 MB. That is exactly the "once a real run
+// reports actual resident/committed numbers, move this" trigger the previous
+// version of this comment was waiting for. 15 MB keeps a deliberate 1 MB
+// margin rather than claiming the last byte: still a cushion against our own
+// bugs (leaks, fragmentation, an unexpectedly large allocation), just a
+// smaller one now that real usage data says the game is nowhere near the
+// ceiling. Revisit downward if a future run shows instability near the new
+// ceiling instead.
 //
 // reduceHeapSize() is libnds's tool for enforcing this: called here before
 // anything has allocated, it shrinks the malloc ceiling by a fixed number of
@@ -48,7 +55,7 @@ u8* g_heapStart = nullptr;
 // On a plain NDS-compatible build/launch (~3.5-4 MB natural ceiling) this is a
 // no-op: the natural ceiling is already below the target, so there is nothing
 // to trim.
-constexpr u32 DSI_HEAP_BUDGET_TARGET_KB = 12 * 1024; // 3/4 of 16 MB
+constexpr u32 DSI_HEAP_BUDGET_TARGET_KB = 15 * 1024; // 15 of 16 MB, 1 MB safety margin
 
 namespace DsiEarlyMemory
 {
