@@ -311,11 +311,16 @@ void GuiScreen::handleInput()
 	VirtualKeyboard::instance().tick();
 	if (!platformTextInputExclusive())
 		ContainerSlotNavigator::instance().tick();
-#if PLATFORM_PS2 || PLATFORM_WII
-	// Left PS2/WII-only, deliberately not widened with the outer gate above:
-	// unlike the two calls it follows, handleConsoleJavaUiNavigation() has
-	// not been checked for DSi-readiness this session, so this is not
-	// something to guess into enabling alongside the two confirmed fixes.
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
+	// DSi report: GuiGameOver's Respawn/Title Screen buttons (an ordinary
+	// GuiScreen, not one of the hand-written PLATFORM_PS2/WII/DSI "legacy"
+	// screens) never responded to the D-pad at all -- this generic vanilla-
+	// screen keyboard-navigation dispatcher was PS2/WII-only, the same class
+	// of gap VirtualKeyboard.cpp/ContainerSlotNavigator.cpp had before this
+	// session widened their own call sites above. See
+	// handleConsoleJavaUiNavigation()'s own PLATFORM_DSI branch for why it
+	// needs a body distinct from both the PS2 and Wii ones, not just this
+	// call site enabled.
 	handleConsoleJavaUiNavigation();
 #endif
 #endif
@@ -379,7 +384,7 @@ bool GuiScreen::isJavaUiKeyboardNavigationEnabled() const
 		return false;
 	if (platformPadRebindExclusive() || platformContainerNavigationActive())
 		return false;
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
 	if (platformTextInputExclusive())
 		return false;
 #endif
@@ -548,7 +553,7 @@ void GuiScreen::clearKeyboardSelectionFromPointer()
 	}
 }
 
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
 void GuiScreen::handleConsoleJavaUiNavigation()
 {
 	if (!isJavaUiKeyboardNavigationEnabled())
@@ -560,6 +565,28 @@ void GuiScreen::handleConsoleJavaUiNavigation()
 #if PLATFORM_WII
 	if (!suppressPointerInput && platformMenuPointerActive())
 		return;
+	const PlatformTextInputSnapshot pad = platformTextInputSnapshot(platformMenuPad());
+	if ((pad.pressed & PLATFORM_TEXT_UP) != 0)
+		moveKeyboardSelection(-1);
+	else if ((pad.pressed & PLATFORM_TEXT_DOWN) != 0)
+		moveKeyboardSelection(1);
+	else if ((pad.pressed & PLATFORM_TEXT_LEFT) != 0)
+		adjustKeyboardSelection(-1);
+	else if ((pad.pressed & PLATFORM_TEXT_RIGHT) != 0)
+		adjustKeyboardSelection(1);
+	if ((pad.pressed & PLATFORM_TEXT_TYPE) != 0)
+		activateKeyboardSelection();
+#elif PLATFORM_DSI
+	// No platform pointer and no separate analog stick to disambiguate from
+	// the D-pad on this hardware (platformGamepadSnapshot() reads the same
+	// D-pad buttons PLATFORM_TEXT_UP/DOWN/LEFT/RIGHT do -- see
+	// InputBackend_DSI.cpp), so neither the Wii branch's pointer-ownership
+	// check nor the PS2 branch's analog-stick-deadzone check (which would
+	// misread every D-pad press meant for this navigation as "the stick
+	// moved" and immediately clear the selection again) applies: just drive
+	// the D-pad straight into the same shared keyboard-selection calls both
+	// other platforms use.
+	(void)suppressPointerInput;
 	const PlatformTextInputSnapshot pad = platformTextInputSnapshot(platformMenuPad());
 	if ((pad.pressed & PLATFORM_TEXT_UP) != 0)
 		moveKeyboardSelection(-1);

@@ -173,12 +173,23 @@ void dsiPushGameplayKeyEvents()
 	// binding, since B alone already means "back/close" in menu navigation
 	// (see mapTextButtons() above) -- the two never conflict, since a menu
 	// being open and gameplay both consuming input at once can't happen.
+	//
+	// InventoryPlayer::changeCurrentItem() does `currentItem -= direction`,
+	// so a positive wheel value DECREASES the slot index (moves the
+	// highlight left on screen) and a negative one INCREASES it (moves
+	// right). This was originally backwards here -- Left pushed -1 (which
+	// increases the index, moving the highlight right) and Right pushed +1
+	// (which decreases it, moving left) -- confirmed on real hardware:
+	// pressing Right visibly moved the selection left. Ps2InputMapper.cpp's
+	// R1/L1 mapping (pushWheel(-1) for the right-side button, pushWheel(1)
+	// for the left) has the correct sign for each direction; swapped to
+	// match it.
 	if (held & KEY_B)
 	{
 		if (pressedEdge & KEY_LEFT)
-			lwjgl::Mouse::detail::pushWheel(-1, 0, 0);
-		if (pressedEdge & KEY_RIGHT)
 			lwjgl::Mouse::detail::pushWheel(1, 0, 0);
+		if (pressedEdge & KEY_RIGHT)
+			lwjgl::Mouse::detail::pushWheel(-1, 0, 0);
 	}
 
 	g_prevActionButtons = held;
