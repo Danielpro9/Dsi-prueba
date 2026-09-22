@@ -3,11 +3,23 @@
 // Thin wrapper, same shape as Display_wii.cpp: DsiEarlyVideo.cpp owns the
 // actual video/GL setup. What lives here is the lwjgl-shaped surface plus:
 //
-//   * "Close requested" maps to START, the same button every DsiBringup.cpp
-//     demo already uses to exit. There is no real menu/HOME-button affordance
-//     on this console the way Wii has, and no alternative has been designed
-//     yet -- this is a placeholder good enough to let the game loop exit
-//     cleanly, not a considered control choice.
+//   * START used to map straight to "close requested" (every DsiBringup.cpp
+//     demo still does, for that standalone smoke-test context). In the real
+//     game that meant the only way to reach the pause/options menu -- to
+//     quit cleanly, change settings, etc. -- was to power off the console,
+//     since nothing else ever requested a menu. Real hardware feedback asked
+//     for START to behave like desktop Minecraft's Escape key instead: pause
+//     when nothing else is open, close whatever menu/screen IS open
+//     otherwise. Synthesizing a KEY_ESCAPE keyboard event on press does
+//     exactly that for free, reusing Minecraft.cpp's existing
+//     currentScreen==nullptr -> displayInGameMenu() branch and every
+//     GuiScreen's base keyTyped() (key==1 closes back to the game) --
+//     nothing DSi-specific needed on the menu side. See
+//     InputBackend_DSI.cpp's dsiPushGameplayKeyEvents() for where that push
+//     actually happens, right alongside A/X/Y. There is still no real
+//     in-game way to quit -- powering off the console remains the only
+//     exit, now a deliberate choice instead of an accident of START having
+//     nothing else to do.
 //
 //   * The video mode is not a real choice: the DS/DSi top screen is always
 //     256x192, so setDisplayMode() has nothing to apply.
@@ -77,15 +89,14 @@ bool isCloseRequested() { return g_closeRequested; }
 bool isVisible() { return true; }
 bool isActive() { return true; }
 
-// No real input backend yet (see InputBackend_DSI.cpp -- controls are
-// deferred), so this only does the one thing needed to let the game loop
-// exit: reads START directly through libnds rather than through
-// platform/Input.h's snapshot, which reports nothing yet.
+// START no longer requests a close -- see the header comment above. Nothing
+// on this console requests one yet (there is no real menu/HOME-button
+// affordance the way Wii has), so g_closeRequested now only exists so
+// isCloseRequested() has a well-defined, always-false answer; the game loop
+// keeps running until the console is powered off.
 void processMessages()
 {
 	scanKeys();
-	if (keysDown() & KEY_START)
-		g_closeRequested = true;
 	dsiUpdateTouchCameraDelta();
 	dsiPushGameplayKeyEvents();
 }

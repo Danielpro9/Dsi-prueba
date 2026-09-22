@@ -1201,6 +1201,28 @@ bool Entity::handleLavaMovement()
 
 void Entity::moveFlying(float f, float f1, float f2)
 {
+#if PLATFORM_DSI
+	// Fall-through diagnostic, next iteration: every other checkpoint in this
+	// investigation (movementFactor, rotationYaw, f4/f5, the onUpdate()
+	// before/after bracket in World.cpp) comes back clean, yet motionX/motionZ
+	// are NaN by the time moveEntity() reads them a few lines below this
+	// function's own two writes. The one thing nothing has checked yet is f/f1
+	// themselves (moveStrafing/moveForward) at entry -- and the "no real
+	// input" guard right below this block does not actually catch them if
+	// they are NaN: `NaN < 0.01f` is false in IEEE 754 (every comparison with
+	// NaN is false), so a NaN f/f1 silently falls through the early return
+	// instead of being treated as "no input", then poisons f3/f/f1 and
+	// finally motionX/motionZ via the += below. Guarding it here both closes
+	// that real logic gap regardless of where f/f1 went bad, and the log line
+	// firing (or not) in the next real-hardware run tells us definitively
+	// whether this is the entry point.
+	if (!std::isfinite(f) || !std::isfinite(f1))
+	{
+		MC_LOG_WARN("dsi", "moveFlying: non-finite move input, treating as no input ticksExisted=%d entity=%s f=%.6f f1=%.6f f2=%.6f\n",
+			(int)ticksExisted, typeid(*this).name(), (double)f, (double)f1, (double)f2);
+		return;
+	}
+#endif
 	float f3 = MathHelper::sqrt_float(f * f + f1 * f1);
 	if (f3 < 0.01f)
 	{

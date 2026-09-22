@@ -25,6 +25,10 @@
 //   Y                 chat         (keyBindChat -- multiplayer only, see
 //                     dsiPushGameplayKeyEvents()'s own comment)
 //   B + D-pad Left/Right   step the hotbar selection
+//   START             pause/menu (synthesizes Escape -- see
+//                     dsiPushGameplayKeyEvents()'s own comment and
+//                     Display_dsi.cpp's header comment for why this replaced
+//                     START-quits-the-game)
 //
 // Movement/camera feed MovementInputFromOptions.cpp / EntityRenderer.cpp's
 // PLATFORM_DIRECT_ANALOG_MOVEMENT / PLATFORM_DIRECT_CAMERA_ENABLED paths, the
@@ -160,6 +164,13 @@ void dsiPushGameplayKeyEvents()
 		lwjgl::Keyboard::detail::pushKey(lwjgl::Keyboard::KEY_SPACE, (held & KEY_A) != 0);
 	if (changed & KEY_X)
 		lwjgl::Keyboard::detail::pushKey(lwjgl::Keyboard::KEY_E, (held & KEY_X) != 0);
+	// START: pause/menu, not quit -- see Display_dsi.cpp's header comment.
+	// Escape is exactly the right synthesized key: Minecraft.cpp already
+	// opens the pause menu on Escape when no screen is up, and every
+	// GuiScreen's base keyTyped() already closes back to the game on Escape
+	// when one is, so this needs no DSi-specific menu handling at all.
+	if (changed & KEY_START)
+		lwjgl::Keyboard::detail::pushKey(lwjgl::Keyboard::KEY_ESCAPE, (held & KEY_START) != 0);
 	// Chat only opens in a multiplayer world (Minecraft.cpp gates GuiChat on
 	// isMultiplayerWorld()), which this NO_NETWORK build can never have --
 	// wired for parity with the requested scheme and in case networking is
