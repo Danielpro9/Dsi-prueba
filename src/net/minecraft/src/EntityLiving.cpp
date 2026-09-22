@@ -34,6 +34,7 @@
 #include "Material.h"
 #include "MovingObjectPosition.h"
 #include "platform/PlatformTuning.h"
+#include "platform/Log.h"
 #include "NBTTagCompound.h"
 #include "StepSound.h"
 #include "Vec3D.h"
@@ -1226,6 +1227,29 @@ void EntityLiving::fall(float f)
 
 void EntityLiving::moveEntityWithHeading(float f, float f1)
 {
+#if PLATFORM_DSI
+	// Fall-through diagnostic, next iteration: the last real-hardware log
+	// showed motionX/motionZ THEMSELVES already NaN at moveEntity()'s entry
+	// (not the bounding box math -- sweepApplyX/sweepApplyZ just copied the
+	// bad velocity in, since neither early-returns on a NaN delta). That
+	// moves the search upstream to whatever sets motionX/motionZ each tick,
+	// and this is the one function that does it for the player. Entry/exit
+	// finite checks (latched so only the first bad tick logs) say whether
+	// the corruption happens inside this specific call; the movementFactor
+	// check further narrows it to the slipperiness/f3 ground-friction math
+	// specifically, one of a few plausible NaN/Inf sources in here.
+	const bool dsiTrack = isPlayer();
+	const bool dsiFiniteAtEntry = std::isfinite(motionX) && std::isfinite(motionZ);
+	static bool s_dsiMotionWasFinite = true;
+	if (dsiTrack && !dsiFiniteAtEntry && s_dsiMotionWasFinite)
+	{
+		// First sighting, but already bad walking in: whatever corrupted
+		// motion happened outside this function entirely (a previous tick's
+		// water/lava branch, or a completely different code path).
+		MC_LOG_WARN("dsi", "moveEntityWithHeading: motion ALREADY non-finite at entry ticksExisted=%d motionX=%.6f motionZ=%.6f onGround=%d isInWater=%d\n",
+			(int)ticksExisted, motionX, motionZ, (int)onGround, (int)isInWater());
+	}
+#endif
 	if (isInWater())
 	{
 		double d = posY;
@@ -1268,6 +1292,14 @@ void EntityLiving::moveEntityWithHeading(float f, float f1)
 		}
 		float f3 = 0.16277136f / (f2 * f2 * f2);
 		float movementFactor = onGround ? (isAIEnabled() ? aiMoveSpeed : landMovementFactor) * f3 : jumpMovementFactor;
+#if PLATFORM_DSI
+		if (dsiTrack && dsiFiniteAtEntry && s_dsiMotionWasFinite && !std::isfinite(movementFactor))
+		{
+			MC_LOG_WARN("dsi", "moveEntityWithHeading: movementFactor non-finite ticksExisted=%d f2=%.6f f3=%.6f onGround=%d aiEnabled=%d aiMoveSpeed=%.6f landMovementFactor=%.6f jumpMovementFactor=%.6f f=%.3f f1=%.3f\n",
+				(int)ticksExisted, (double)f2, (double)f3, (int)onGround, (int)isAIEnabled(),
+				(double)aiMoveSpeed, (double)landMovementFactor, (double)jumpMovementFactor, (double)f, (double)f1);
+		}
+#endif
 		moveFlying(f, f1, movementFactor);
 		f2 = 0.91f;
 		if (onGround)
@@ -1307,6 +1339,18 @@ void EntityLiving::moveEntityWithHeading(float f, float f1)
 		motionX *= f2;
 		motionZ *= f2;
 	}
+#if PLATFORM_DSI
+	if (dsiTrack)
+	{
+		const bool dsiFiniteAtExit = std::isfinite(motionX) && std::isfinite(motionZ);
+		if (dsiFiniteAtEntry && !dsiFiniteAtExit && s_dsiMotionWasFinite)
+		{
+			MC_LOG_WARN("dsi", "moveEntityWithHeading: motion became non-finite THIS CALL ticksExisted=%d onGround=%d isInWater=%d posX=%.3f posZ=%.3f f=%.3f f1=%.3f\n",
+				(int)ticksExisted, (int)onGround, (int)isInWater(), posX, posZ, (double)f, (double)f1);
+		}
+		s_dsiMotionWasFinite = dsiFiniteAtExit;
+	}
+#endif
 	field_705_Q = field_704_R;
 #if PLATFORM_FLOAT_ENTITY_AI_MATH
 	const float d2 = (float)(posX - prevPosX);
