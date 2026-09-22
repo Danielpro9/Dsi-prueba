@@ -30,7 +30,7 @@ GuiIngameMenu::GuiIngameMenu()
 	, updateCounter(0)
 	, selectedControlIndex(-1)
 	, hoveredControlIndex(-1)
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
 	, legacyPauseOpenedAtMillis(System::currentTimeMillis())
 #endif
 #if PLATFORM_PS2
@@ -239,7 +239,16 @@ void GuiIngameMenu::updateScreen()
 		return;
 
 	syncLegacySelection();
-#if PLATFORM_WII
+#if PLATFORM_WII || PLATFORM_DSI
+	// Same gap GuiMainMenu.cpp's updateScreen() already closed for DSi (see
+	// its PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI branch): this screen's
+	// own D-pad/A/B handling was PS2-only (handleSpecializedMenuInput() above)
+	// or Wii-only (this block), so with legacyUI on -- which disables the
+	// generic Java UI keyboard navigation via usesSpecializedMenuNavigation()
+	// -- DSi's pause menu had no working input path at all. Real-hardware
+	// report: Start correctly opened/closed it (that goes through keyTyped()'s
+	// Escape handling instead, untouched by legacyUI), but D-pad/A/B inside it
+	// did nothing.
 	const PlatformTextInputSnapshot pad = platformTextInputSnapshot(platformMenuPad());
 	if (!legacyPauseInputDelayElapsed(legacyPauseOpenedAtMillis, System::currentTimeMillis()))
 		return;
@@ -247,8 +256,17 @@ void GuiIngameMenu::updateScreen()
 		moveLegacySelection(-1);
 	else if ((pad.pressed & PLATFORM_TEXT_DOWN) != 0)
 		moveLegacySelection(1);
+#if PLATFORM_DSI
+	// DSi has no menu pointer (platformMenuPointerActive() is always false --
+	// see InputBackend_DSI.cpp), same reasoning as GuiMainMenu.cpp's own
+	// PLATFORM_PS2 || PLATFORM_DSI branch: take the unconditional check
+	// instead of Wii's pointer-aware one.
+	if ((pad.pressed & PLATFORM_TEXT_TYPE) != 0)
+		activateLegacySelection();
+#else
 	if (!platformMenuPointerActive() && (pad.pressed & PLATFORM_TEXT_TYPE) != 0)
 		activateLegacySelection();
+#endif
 	if ((pad.pressed & PLATFORM_TEXT_BACK) != 0)
 	{
 		if (mc->sndManager != nullptr)

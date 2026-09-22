@@ -781,10 +781,25 @@ void Entity::moveEntity(double d, double d1, double d2)
 	// in the sweep itself". Widened from isPlayer()-only: a chicken has
 	// shown the exact same corruption at a completely different location,
 	// so whatever this is is not specific to the player or to D-pad input.
+	//
+	// Next lead: every checkpoint between moveFlying()'s writes and here
+	// comes back clean (finite f/f1/f2/rotationYaw/f4/f5, finite motion at
+	// moveEntityWithHeading() entry) in the latest real-hardware logs, which
+	// is not explainable by this function's own arithmetic -- finite inputs
+	// cannot produce NaN through a plain multiply-add. That points away from
+	// a logic bug in this call chain and towards memory corruption: the
+	// corrupted entities always sit at the exact same handful of world
+	// positions across separate sessions (spawn-adjacent), first appear only
+	// a few seconds into a session, and a real player-entity destruction
+	// (the "~Entity: destroying a known player entity" log below, which
+	// already prints its own `this` pointer) has been observed in the same
+	// narrow window. Logging `this` here lets the next log directly check
+	// whether a corrupted entity's address matches one just freed --
+	// straightforward to grep for once both are pointer-tagged.
 	if (!std::isfinite(d) || !std::isfinite(d2))
 	{
-		MC_LOG_WARN("dsi", "moveEntity: d/d2 already non-finite before sweep ticksExisted=%d entity=%s d=%.6f d2=%.6f isSneaking=%d onGround=%d flag=%d isInWeb=%d\n",
-			(int)ticksExisted, typeid(*this).name(), d, d2, (int)isSneaking(), (int)onGround, (int)flag, (int)isInWeb);
+		MC_LOG_WARN("dsi", "moveEntity: d/d2 already non-finite before sweep ticksExisted=%d entity=%s this=%p d=%.6f d2=%.6f isSneaking=%d onGround=%d flag=%d isInWeb=%d\n",
+			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), d, d2, (int)isSneaking(), (int)onGround, (int)flag, (int)isInWeb);
 	}
 #endif
 #if PLATFORM_FLOAT_COLLISION_SWEEP

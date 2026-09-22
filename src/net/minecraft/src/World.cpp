@@ -3654,8 +3654,8 @@ void World::updateEntityWithOptionalForce(Entity* entity, bool flag)
         const bool dsiMotionFiniteAfterUpdate = std::isfinite(entity->motionX) && std::isfinite(entity->motionY) && std::isfinite(entity->motionZ);
         if (dsiMotionFiniteBeforeUpdate != dsiMotionFiniteAfterUpdate || !dsiMotionFiniteAfterUpdate)
         {
-            MC_LOG_WARN("dsi", "World::updateEntityWithOptionalForce: onUpdate() bracket for %s finiteBefore=%d finiteAfter=%d motionX=%.6f motionY=%.6f motionZ=%.6f\n",
-                typeid(*entity).name(), (int)dsiMotionFiniteBeforeUpdate, (int)dsiMotionFiniteAfterUpdate,
+            MC_LOG_WARN("dsi", "World::updateEntityWithOptionalForce: onUpdate() bracket for %s this=%p finiteBefore=%d finiteAfter=%d motionX=%.6f motionY=%.6f motionZ=%.6f\n",
+                typeid(*entity).name(), static_cast<const void*>(entity), (int)dsiMotionFiniteBeforeUpdate, (int)dsiMotionFiniteAfterUpdate,
                 entity->motionX, entity->motionY, entity->motionZ);
         }
     }
@@ -3729,8 +3729,8 @@ void World::updateEntityWithOptionalForce(Entity* entity, bool flag)
         !std::isfinite(entity->boundingBox->minY) || !std::isfinite(entity->boundingBox->maxY) ||
         !std::isfinite(entity->boundingBox->minZ) || !std::isfinite(entity->boundingBox->maxZ))
     {
-        MC_LOG_WARN("dsi", "World::updateEntityWithOptionalForce: rebuilding non-finite boundingBox for %s posX=%.3f posY=%.3f posZ=%.3f\n",
-            typeid(*entity).name(), entity->posX, entity->posY, entity->posZ);
+        MC_LOG_WARN("dsi", "World::updateEntityWithOptionalForce: rebuilding non-finite boundingBox for %s this=%p posX=%.3f posY=%.3f posZ=%.3f\n",
+            typeid(*entity).name(), static_cast<const void*>(entity), entity->posX, entity->posY, entity->posZ);
         entity->setPosition(entity->posX, entity->posY, entity->posZ);
     }
 #endif
