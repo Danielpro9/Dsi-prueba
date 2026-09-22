@@ -5,6 +5,7 @@
 
 #include <nds.h>
 #include <algorithm>
+#include <climits>
 #include <cstring>
 #include <vector>
 
@@ -127,6 +128,15 @@ struct DsiTexture
 	bool allocated = false;
 	bool paletted = false; // Set by uploadTexture(): which VRAM format `allocated` actually used.
 	std::vector<std::uint8_t> rgba; // width*height*4, tightly packed RGBA8
+	// Established once by a genuine full-image upload (renderTextureImageRgba)
+	// and then REUSED, not rebuilt, by every later sub-image patch
+	// (renderTextureSubImageRgba) -- see the long comment on
+	// tryUploadWithStablePalette() below for why rebuilding from scratch on
+	// every patch was the actual cause of the reported per-tile colour
+	// flicker/cycling on terrain.png. stableQuantShift < 0 means "not
+	// established yet, next upload must do a full (re)build".
+	std::vector<std::uint16_t> stablePalette;
+	int stableQuantShift = -1;
 };
 
 // How many bytes of the four 128 KB texture-image banks (DsiEarlyVideo.cpp)
@@ -248,7 +258,7 @@ constexpr std::uint8_t kBayer4x4[4][4] = {
 };
 
 PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, int param,
-	int quantShift, std::size_t& outColorCount)
+	int quantShift, std::size_t& outColorCount, std::vector<std::uint16_t>& outPalette)
 {
 	const std::size_t pixelCount = static_cast<std::size_t>(tex.width) * tex.height;
 	const std::uint8_t channelMask = static_cast<std::uint8_t>(~((1u << quantShift) - 1u) & 0x1Fu);
@@ -258,7 +268,8 @@ PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, i
 	const int ditherStep = quantShift > 0 ? (1 << (quantShift + 3)) : 0;
 
 	std::vector<std::int16_t> colorToIndex(32768, -1);
-	std::vector<std::uint16_t> palette;
+	std::vector<std::uint16_t>& palette = outPalette;
+	palette.clear();
 	palette.reserve(256);
 	palette.push_back(0); // Index 0's actual colour is irrelevant -- GL_TEXTURE_COLOR0_TRANSPARENT hides it.
 	std::vector<std::uint8_t> indices(pixelCount);
@@ -316,6 +327,126 @@ PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, i
 	return PalettedUploadResult::Success;
 }
 
+// Nearest existing palette entry by RGB555 channel distance -- used once
+// tex.stablePalette is full (256 entries) and a patch introduces a colour
+// that genuinely is not in it yet. Never returns index 0 (the reserved
+// transparent slot): an opaque pixel landing there would render as a hole
+// in the texture regardless of what colour index 0 actually stores, since
+// GL_TEXTURE_COLOR0_TRANSPARENT hides it unconditionally.
+int nearestPaletteIndex(const std::vector<std::uint16_t>& palette, std::uint16_t color15)
+{
+	if (palette.size() <= 1)
+		return 0; // No real colour to match against yet; only reachable for a texture that was 100% transparent until now.
+
+	const int r = color15 & 0x1F;
+	const int g = (color15 >> 5) & 0x1F;
+	const int b = (color15 >> 10) & 0x1F;
+	int bestIndex = 1;
+	int bestDist = INT_MAX;
+	for (std::size_t i = 1; i < palette.size(); ++i)
+	{
+		const int pr = palette[i] & 0x1F;
+		const int pg = (palette[i] >> 5) & 0x1F;
+		const int pb = (palette[i] >> 10) & 0x1F;
+		const int dr = r - pr, dg = g - pg, db = b - pb;
+		const int dist = dr * dr + dg * dg + db * db;
+		if (dist < bestDist)
+		{
+			bestDist = dist;
+			bestIndex = static_cast<int>(i);
+		}
+	}
+	return bestIndex;
+}
+
+// Patches indices against tex.stablePalette/tex.stableQuantShift as they
+// stand -- established once by a full-image upload (see tryUploadPaletted
+// below) -- instead of rebuilding the palette from this call's pixels.
+//
+// Real-hardware evidence this fixes: glTexImageNtr2D() has no partial
+// upload (see the DsiTexture struct comment above), so every animated-tile
+// sub-image patch (lava/water/fire flicker, leaf/water colormap tinting,
+// any TextureFX still enabled) used to re-run the FULL establishing scan
+// below on the *entire* 256x256 atlas, every single time. That scan is
+// scan-order-greedy: whichever pixel reaches a given quantized colour
+// bucket first wins that palette slot's stored value, and with dithering
+// (kBayer4x4 above) that winning value depends on the pixel's (x, y)
+// position too. So a one-tile patch changing what the scan sees first could
+// silently reassign the stored colour of a palette slot shared by
+// thousands of unrelated pixels elsewhere on the atlas -- e.g. a tree tile
+// nowhere near the animated tile -- every time that patch ran. That matches
+// a real-hardware report of tree textures visibly cycling between colours
+// and textures flickering white for a frame: not a random glitch, the
+// palette for the whole atlas was being non-deterministically re-derived
+// on every dynamic-tile update. Keeping the palette stable once established
+// removes both the per-patch full-atlas rescan (a real CPU cost paid on
+// every dynamic tile update) and the colour instability in one change.
+bool tryUploadWithStablePalette(int name, DsiTexture& tex, int param)
+{
+	const std::size_t pixelCount = static_cast<std::size_t>(tex.width) * tex.height;
+	const int quantShift = tex.stableQuantShift;
+	const std::uint8_t channelMask = static_cast<std::uint8_t>(~((1u << quantShift) - 1u) & 0x1Fu);
+	const int ditherStep = quantShift > 0 ? (1 << (quantShift + 3)) : 0;
+
+	std::vector<std::int16_t> colorToIndex(32768, -1);
+	for (std::size_t i = 0; i < tex.stablePalette.size(); ++i)
+		colorToIndex[tex.stablePalette[i]] = static_cast<std::int16_t>(i);
+
+	std::vector<std::uint8_t> indices(pixelCount);
+	const std::uint8_t* src = tex.rgba.data();
+	for (std::size_t i = 0; i < pixelCount; ++i)
+	{
+		const std::uint8_t a = src[i * 4 + 3];
+		if (a < 128)
+		{
+			indices[i] = 0;
+			continue;
+		}
+
+		std::uint8_t r8 = src[i * 4 + 0];
+		std::uint8_t g8 = src[i * 4 + 1];
+		std::uint8_t b8 = src[i * 4 + 2];
+		if (ditherStep > 0)
+		{
+			const int x = static_cast<int>(i % static_cast<std::size_t>(tex.width));
+			const int y = static_cast<int>(i / static_cast<std::size_t>(tex.width));
+			const int bias = (kBayer4x4[y & 3][x & 3] * ditherStep) / 16;
+			r8 = static_cast<std::uint8_t>(std::min(255, r8 + bias));
+			g8 = static_cast<std::uint8_t>(std::min(255, g8 + bias));
+			b8 = static_cast<std::uint8_t>(std::min(255, b8 + bias));
+		}
+		const std::uint8_t r = (r8 >> 3) & channelMask;
+		const std::uint8_t g = (g8 >> 3) & channelMask;
+		const std::uint8_t b = (b8 >> 3) & channelMask;
+		const std::uint16_t color15 = static_cast<std::uint16_t>(r | (g << 5) | (b << 10));
+
+		std::int16_t index = colorToIndex[color15];
+		if (index < 0)
+		{
+			if (tex.stablePalette.size() < 256)
+			{
+				index = static_cast<std::int16_t>(tex.stablePalette.size());
+				colorToIndex[color15] = index;
+				tex.stablePalette.push_back(color15);
+			}
+			else
+			{
+				index = static_cast<std::int16_t>(nearestPaletteIndex(tex.stablePalette, color15));
+			}
+		}
+		indices[i] = static_cast<std::uint8_t>(index);
+	}
+
+	glBindTexture(0, name);
+	const int uploaded = glTexImage2D(0, 0, GL_RGB256, tex.width, tex.height, 0,
+		param | GL_TEXTURE_COLOR0_TRANSPARENT, indices.data());
+	if (!uploaded)
+		return false;
+
+	glColorTableNtr(tex.stablePalette.size(), tex.stablePalette.data());
+	return true;
+}
+
 // Diagnostic for the VRAM-exhaustion investigation confirmed items.png/
 // inventory.png specifically overflow the exact-colour palette (256x256,
 // thousands of distinct anti-aliased shades across a large item atlas) --
@@ -330,17 +461,32 @@ PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, i
 // footprint (still 1 byte/pixel regardless of how many of the 256 slots are
 // used), only whether the colour count fits, so retrying after a genuine
 // GPU-out-of-space rejection would just fail again identically.
-bool tryUploadPaletted(int name, const DsiTexture& tex, int param)
+//
+// forceRebuild is true only for a genuine full-image (re)load
+// (renderTextureImageRgba -- texture pack switch, first load, ...): that
+// always re-establishes tex.stablePalette from scratch, since it may be
+// wholly different content now. A sub-image patch (renderTextureSubImageRgba)
+// passes false and reuses whatever was already established -- see
+// tryUploadWithStablePalette above for why.
+bool tryUploadPaletted(int name, DsiTexture& tex, int param, bool forceRebuild)
 {
+	if (!forceRebuild && tex.stableQuantShift >= 0)
+		return tryUploadWithStablePalette(name, tex, param);
+
+	tex.stablePalette.clear();
+	tex.stableQuantShift = -1;
 	for (int quantShift = 0; quantShift <= 4; ++quantShift)
 	{
 		std::size_t colorCount = 0;
-		const PalettedUploadResult result = tryUploadPalettedAtDepth(name, tex, param, quantShift, colorCount);
+		std::vector<std::uint16_t> palette;
+		const PalettedUploadResult result = tryUploadPalettedAtDepth(name, tex, param, quantShift, colorCount, palette);
 		if (result == PalettedUploadResult::Success)
 		{
 			if (quantShift > 0)
 				MC_LOG_WARN("dsi", "paletted upload used colour quantization (shift=%d, %u colours) to fit: %dx%d\n",
 					quantShift, (unsigned)colorCount, tex.width, tex.height);
+			tex.stablePalette = std::move(palette);
+			tex.stableQuantShift = quantShift;
 			return true;
 		}
 		if (result == PalettedUploadResult::SpaceExhausted)
@@ -370,7 +516,7 @@ bool tryUploadPaletted(int name, const DsiTexture& tex, int param)
 // createMissingTexture()) actually engages the way it already does for a
 // texture that fails to *decode* -- a recognisable placeholder instead of an
 // invisible, silent failure.
-bool uploadTexture(int name, DsiTexture& tex)
+bool uploadTexture(int name, DsiTexture& tex, bool forceRebuildPalette)
 {
 	if (tex.width <= 0 || tex.height <= 0 || tex.rgba.empty())
 		return false;
@@ -379,7 +525,7 @@ bool uploadTexture(int name, DsiTexture& tex)
 	if (!tex.clamp)
 		param |= GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T;
 
-	if (tryUploadPaletted(name, tex, param))
+	if (tryUploadPaletted(name, tex, param, forceRebuildPalette))
 	{
 		glTexParameter(0, param); // wrap bits already set above; kept for parity with callers that only touch params later
 		tex.paletted = true;
@@ -936,7 +1082,10 @@ void renderTextureSubImageRgba(int level, int x, int y, int width, int height, c
 	// Same dimensions as the already-successful initial upload, so this can't
 	// newly fail the power-of-two check -- but propagate honestly anyway
 	// rather than assume, in case VRAM pressure is what fails it this time.
-	tex->allocated = uploadTexture(g_boundTexture, *tex);
+	// forceRebuildPalette=false: reuse tex's already-established stable
+	// palette instead of re-deriving it from this patch alone -- see
+	// tryUploadWithStablePalette()'s comment for why.
+	tex->allocated = uploadTexture(g_boundTexture, *tex, false);
 }
 
 void renderTextureImageRgba(int level, int width, int height, const void* pixels)
@@ -958,7 +1107,10 @@ void renderTextureImageRgba(int level, int width, int height, const void* pixels
 	// RenderEngine.cpp's caller treats "invalid" the same as "failed to
 	// decode" -- binding the checkerboard placeholder instead of leaving a
 	// textureless polygon at its flat vertex colour.
-	tex->allocated = uploadTexture(g_boundTexture, *tex);
+	// forceRebuildPalette=true: this is a genuine full-image (re)load, so the
+	// old stable palette (if any -- e.g. a texture pack switch reusing this
+	// same GL texture name) may not apply to this content at all.
+	tex->allocated = uploadTexture(g_boundTexture, *tex, true);
 }
 
 // Real-hardware symptom this fixes: once the panorama texture upload above

@@ -3624,6 +3624,20 @@ void World::updateEntityWithOptionalForce(Entity* entity, bool flag)
     entity->prevRotationYaw = entity->rotationYaw;
     entity->prevRotationPitch = entity->rotationPitch;
     
+#if PLATFORM_DSI
+    // Fall-through diagnostic, next iteration: the motion self-heal added
+    // last round (right below, after this block) has never once fired in a
+    // real-hardware log, despite Entity::moveEntity()'s own pre-sweep check
+    // proving motionX/motionZ are NaN on the exact same tick, in the exact
+    // same entity. That is not explainable by anything read in this
+    // function's source -- there is no early return between onUpdate() and
+    // the motion-repair check below. Bracket the call directly and
+    // unconditionally (every entity, not just the player -- a chicken has
+    // shown the same corruption at a different location entirely, ruling
+    // out anything player-input-specific) to see the true before/after
+    // state with nothing left to infer.
+    const bool dsiMotionFiniteBeforeUpdate = std::isfinite(entity->motionX) && std::isfinite(entity->motionY) && std::isfinite(entity->motionZ);
+#endif
     if (flag && entity->addedToChunk)
     {
         if (entity->ridingEntity != nullptr)
@@ -3635,7 +3649,18 @@ void World::updateEntityWithOptionalForce(Entity* entity, bool flag)
             entity->onUpdate();
         }
     }
-    
+#if PLATFORM_DSI
+    {
+        const bool dsiMotionFiniteAfterUpdate = std::isfinite(entity->motionX) && std::isfinite(entity->motionY) && std::isfinite(entity->motionZ);
+        if (dsiMotionFiniteBeforeUpdate != dsiMotionFiniteAfterUpdate || !dsiMotionFiniteAfterUpdate)
+        {
+            MC_LOG_WARN("dsi", "World::updateEntityWithOptionalForce: onUpdate() bracket for %s finiteBefore=%d finiteAfter=%d motionX=%.6f motionY=%.6f motionZ=%.6f\n",
+                typeid(*entity).name(), (int)dsiMotionFiniteBeforeUpdate, (int)dsiMotionFiniteAfterUpdate,
+                entity->motionX, entity->motionY, entity->motionZ);
+        }
+    }
+#endif
+
     if (std::isnan(entity->posX) || std::isinf(entity->posX))
     {
         entity->posX = entity->lastTickPosX;

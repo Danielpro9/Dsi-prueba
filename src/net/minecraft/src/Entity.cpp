@@ -778,11 +778,13 @@ void Entity::moveEntity(double d, double d1, double d2)
 	// when isPlayer() && onGround && isSneaking()). Check here, right
 	// before the sweep/collision-apply machinery that actually writes
 	// boundingBox, to bisect "broke in the sneak-edge search" from "broke
-	// in the sweep itself".
-	if (isPlayer() && (!std::isfinite(d) || !std::isfinite(d2)))
+	// in the sweep itself". Widened from isPlayer()-only: a chicken has
+	// shown the exact same corruption at a completely different location,
+	// so whatever this is is not specific to the player or to D-pad input.
+	if (!std::isfinite(d) || !std::isfinite(d2))
 	{
-		MC_LOG_WARN("dsi", "moveEntity: d/d2 already non-finite before sweep ticksExisted=%d d=%.6f d2=%.6f isSneaking=%d onGround=%d flag=%d isInWeb=%d\n",
-			(int)ticksExisted, d, d2, (int)isSneaking(), (int)onGround, (int)flag, (int)isInWeb);
+		MC_LOG_WARN("dsi", "moveEntity: d/d2 already non-finite before sweep ticksExisted=%d entity=%s d=%.6f d2=%.6f isSneaking=%d onGround=%d flag=%d isInWeb=%d\n",
+			(int)ticksExisted, typeid(*this).name(), d, d2, (int)isSneaking(), (int)onGround, (int)flag, (int)isInWeb);
 	}
 #endif
 #if PLATFORM_FLOAT_COLLISION_SWEEP
@@ -1221,17 +1223,19 @@ void Entity::moveFlying(float f, float f1, float f2)
 	// (latched, same family as everywhere else in this investigation) never
 	// fire despite motionX/motionZ only ever being written here (this
 	// function early-returns above whenever f3 < 0.01f, i.e. whenever
-	// there is no real movement input -- so this write only runs on an
-	// actual D-pad press, matching the user's own report that the freeze
-	// tracks pressing the D-pad). Deliberately unlatched (logs every
-	// occurrence, not just the first) to sidestep whatever is suppressing
-	// the other checks and pin down directly whether f2 (movementFactor,
-	// which goes to infinity if a block's slipperiness*0.91 cubes to zero
-	// in moveEntityWithHeading) or rotationYaw is already bad walking in.
-	if (isPlayer() && (!std::isfinite(f2) || !std::isfinite(rotationYaw) || !std::isfinite(f4) || !std::isfinite(f5)))
+	// there is no real movement input). Widened from isPlayer()-only: a
+	// chicken has shown the exact same corruption at a completely different
+	// location, so this is not tied to the player or D-pad input -- it is
+	// AI-driven moveStrafing/moveForward for a chicken, not a real button
+	// press. Deliberately unlatched (logs every occurrence, not just the
+	// first) to sidestep whatever is suppressing the other checks and pin
+	// down directly whether f2 (movementFactor, which goes to infinity if a
+	// block's slipperiness*0.91 cubes to zero in moveEntityWithHeading) or
+	// rotationYaw is already bad walking in.
+	if (!std::isfinite(f2) || !std::isfinite(rotationYaw) || !std::isfinite(f4) || !std::isfinite(f5))
 	{
-		MC_LOG_WARN("dsi", "moveFlying: bad input ticksExisted=%d f=%.6f f1=%.6f f2=%.6f rotationYaw=%.6f f4=%.6f f5=%.6f motionXBefore=%.6f motionZBefore=%.6f\n",
-			(int)ticksExisted, (double)f, (double)f1, (double)f2, (double)rotationYaw, (double)f4, (double)f5, motionX, motionZ);
+		MC_LOG_WARN("dsi", "moveFlying: bad input ticksExisted=%d entity=%s f=%.6f f1=%.6f f2=%.6f rotationYaw=%.6f f4=%.6f f5=%.6f motionXBefore=%.6f motionZBefore=%.6f\n",
+			(int)ticksExisted, typeid(*this).name(), (double)f, (double)f1, (double)f2, (double)rotationYaw, (double)f4, (double)f5, motionX, motionZ);
 	}
 #endif
 	motionX += f * f5 - f1 * f4;
