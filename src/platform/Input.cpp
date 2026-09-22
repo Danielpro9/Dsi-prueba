@@ -5,6 +5,7 @@ namespace
 bool g_textInputExclusive = false;
 bool g_containerNavigationActive = false;
 bool g_padRebindExclusive = false;
+bool g_textInputJustClosed = false;
 }
 
 void platformSetTextInputExclusive(bool active)
@@ -15,6 +16,18 @@ void platformSetTextInputExclusive(bool active)
 bool platformTextInputExclusive()
 {
     return g_textInputExclusive;
+}
+
+void platformNotifyTextInputClosed()
+{
+    g_textInputJustClosed = true;
+}
+
+bool platformConsumeTextInputJustClosed()
+{
+    const bool wasClosed = g_textInputJustClosed;
+    g_textInputJustClosed = false;
+    return wasClosed;
 }
 
 void platformSetPadRebindExclusive(bool active)
