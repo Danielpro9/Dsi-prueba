@@ -32,6 +32,26 @@
 
 int_t Entity::nextEntityID = 0;
 
+#if PLATFORM_DSI
+// Fall-through diagnostic, next iteration: the moveEntity()-entry NaN check
+// caught the transition (ticksExisted=24, onGround=1, zero motion, boundingBox
+// already NaN walking in), which rules out every write inside moveEntity()
+// itself for THAT specific tick -- none of them should even run with all-zero
+// deltas (sweepApplyX/Y/Z all early-return on d==0.0, and the step-up block
+// requires an actual requested-vs-resolved difference that can't happen from
+// an all-zero request). So the corruption most likely happened on a PRIOR
+// tick, in one of the several places that write boundingBox's fields
+// directly: setPosition(), the three sweepApplyX/Y/Z helpers below, or either
+// of moveEntity()'s two boundingBox->setBB() restores (the step-up attempt's
+// restore-to-pre-step, and its restore-to-post-first-resolution when the step
+// did not help). A last-writer tag, updated at each of those sites and
+// printed alongside the existing finite-state-changed line, will name the
+// exact one that ran most recently before the NaN was observed -- direct
+// evidence instead of reasoning about which of several plausible-looking
+// sites it must be.
+const char* g_dsiLastBoundingBoxWrite = "none";
+#endif
+
 namespace
 {
 	inline bool hasWorldCollision(World *world, Entity *entity, AxisAlignedBB *bounds)
@@ -159,6 +179,9 @@ namespace
 		const bool clipped = sweepAxisX(sweep, e, (float)d, face);
 		if (clipped)
 			d = sweepExactDelta(d, sweep.originX, face, bounds->minX, bounds->maxX);
+#if PLATFORM_DSI
+		g_dsiLastBoundingBoxWrite = "sweepApplyX";
+#endif
 		bounds->minX += d;
 		bounds->maxX += d;
 		if (clipped)
@@ -181,6 +204,9 @@ namespace
 		const bool clipped = sweepAxisY(sweep, e, (float)d1, face);
 		if (clipped)
 			d1 = sweepExactDelta(d1, sweep.originY, face, bounds->minY, bounds->maxY);
+#if PLATFORM_DSI
+		g_dsiLastBoundingBoxWrite = "sweepApplyY";
+#endif
 		bounds->minY += d1;
 		bounds->maxY += d1;
 		if (clipped)
@@ -203,6 +229,9 @@ namespace
 		const bool clipped = sweepAxisZ(sweep, e, (float)d2, face);
 		if (clipped)
 			d2 = sweepExactDelta(d2, sweep.originZ, face, bounds->minZ, bounds->maxZ);
+#if PLATFORM_DSI
+		g_dsiLastBoundingBoxWrite = "sweepApplyZ";
+#endif
 		bounds->minZ += d2;
 		bounds->maxZ += d2;
 		if (clipped)
@@ -410,6 +439,7 @@ void Entity::setPosition(double d, double d1, double d2)
 		MC_LOG_WARN("dsi", "setPosition NaN: d=%.3f d1=%.3f d2=%.3f width=%.3f height=%.3f yOffset=%.3f ySize=%.3f ticksExisted=%d\n",
 			d, d1, d2, (double)width, (double)height, (double)yOffset, (double)ySize, (int)ticksExisted);
 	}
+	g_dsiLastBoundingBoxWrite = "setPosition";
 #endif
 	boundingBox->setBounds(d - (double)f, (d1 - (double)yOffset) + (double)ySize, d2 - (double)f,
 	                       d + (double)f, (d1 - (double)yOffset) + (double)ySize + (double)f1, d2 + (double)f);
@@ -589,15 +619,18 @@ void Entity::moveEntity(double d, double d1, double d2)
 			&& std::isfinite(boundingBox->maxX) && std::isfinite(boundingBox->maxZ);
 		if (nowFinite != s_boxWasFinite)
 		{
-			MC_LOG_WARN("dsi", "moveEntity boundingBox finite-state changed: nowFinite=%d ticksExisted=%d posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f requestedD=%.6f requestedD2=%.6f onGround=%d minX=%.3f maxX=%.3f minZ=%.3f maxZ=%.3f\n",
+			MC_LOG_WARN("dsi", "moveEntity boundingBox finite-state changed: nowFinite=%d ticksExisted=%d posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f requestedD=%.6f requestedD2=%.6f onGround=%d minX=%.3f maxX=%.3f minZ=%.3f maxZ=%.3f lastWrite=%s\n",
 				(int)nowFinite, (int)ticksExisted, posX, posZ, motionX, motionZ, d, d2, (int)onGround,
-				boundingBox->minX, boundingBox->maxX, boundingBox->minZ, boundingBox->maxZ);
+				boundingBox->minX, boundingBox->maxX, boundingBox->minZ, boundingBox->maxZ, g_dsiLastBoundingBoxWrite);
 			s_boxWasFinite = nowFinite;
 		}
 	}
 #endif
 	if (noClip)
 	{
+#if PLATFORM_DSI
+		g_dsiLastBoundingBoxWrite = "noClipOffset";
+#endif
 		boundingBox->offset(d, d1, d2);
 		posX = (boundingBox->minX + boundingBox->maxX) / 2.0;
 		posY = (boundingBox->minY + (double)yOffset) - (double)ySize;
@@ -758,6 +791,9 @@ void Entity::moveEntity(double d, double d1, double d2)
 		d1 = stepHeight;
 		d2 = d7;
 		AxisAlignedBB *axisalignedbb1 = boundingBox->copy();
+#if PLATFORM_DSI
+		g_dsiLastBoundingBoxWrite = "stepUpRestorePre";
+#endif
 		boundingBox->setBB(axisalignedbb);
 #if PLATFORM_FLOAT_COLLISION_SWEEP
 		worldObj->collectCollisionSweep(this, boundingBox->addCoord(d, d1, d2), s_collisionSweep);
@@ -834,6 +870,9 @@ void Entity::moveEntity(double d, double d1, double d2)
 			d = d9;
 			d1 = d11;
 			d2 = d13;
+#if PLATFORM_DSI
+			g_dsiLastBoundingBoxWrite = "stepUpRestorePost";
+#endif
 			boundingBox->setBB(axisalignedbb1);
 		}
 		else
