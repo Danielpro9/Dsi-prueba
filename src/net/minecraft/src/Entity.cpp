@@ -570,6 +570,32 @@ bool Entity::isOffsetPositionInLiquid(double d, double d1, double d2)
 
 void Entity::moveEntity(double d, double d1, double d2)
 {
+#if PLATFORM_DSI
+	// Broader fall-through diagnostic: the setPosition() NaN check added last
+	// round never fired on a real-hardware run that still showed the bug
+	// (sweepY's localBox X/Z still NaN throughout), which rules out
+	// setPosition() as the entry point and means boundingBox's X/Z go bad
+	// somewhere else -- most likely one of this function's own unconditional
+	// `bounds->minX/maxX += d` writes in the sweep-apply helpers above (no
+	// NaN guard there, unlike AxisAlignedBB::addCoord()'s `if (d < 0.0)`-style
+	// checks, which do skip a NaN delta harmlessly). Checked at function
+	// entry, before anything here can change boundingBox, and only logged on
+	// a finite<->non-finite transition (not every call) so this stays cheap
+	// and the log shows the exact tick where it flips either way.
+	if (isPlayer())
+	{
+		static bool s_boxWasFinite = true;
+		const bool nowFinite = std::isfinite(boundingBox->minX) && std::isfinite(boundingBox->minZ)
+			&& std::isfinite(boundingBox->maxX) && std::isfinite(boundingBox->maxZ);
+		if (nowFinite != s_boxWasFinite)
+		{
+			MC_LOG_WARN("dsi", "moveEntity boundingBox finite-state changed: nowFinite=%d ticksExisted=%d posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f requestedD=%.6f requestedD2=%.6f onGround=%d minX=%.3f maxX=%.3f minZ=%.3f maxZ=%.3f\n",
+				(int)nowFinite, (int)ticksExisted, posX, posZ, motionX, motionZ, d, d2, (int)onGround,
+				boundingBox->minX, boundingBox->maxX, boundingBox->minZ, boundingBox->maxZ);
+			s_boxWasFinite = nowFinite;
+		}
+	}
+#endif
 	if (noClip)
 	{
 		boundingBox->offset(d, d1, d2);
