@@ -467,6 +467,34 @@ void Entity::onUpdate()
 
 void Entity::onEntityUpdate()
 {
+#if PLATFORM_DSI
+	// Fall-through diagnostic, next iteration: a respawn-cycle log showed the
+	// moveEntity() noClip branch taken for the player -- lastXWrite/lastZWrite
+	// = "noClipOffset", something never seen before this round. There is no
+	// code path in this codebase that ever sets a player's noClip true (grepped
+	// the whole tree: only a handful of particle-effect classes do, none of
+	// them EntityPlayer/EntityLiving), so this can only mean the noClip field
+	// itself got corrupted -- alongside, presumably, whatever nearby field
+	// (very possibly motionX/motionZ, sitting a few members away in the same
+	// object) is what has been going NaN all along. Every previous diagnostic
+	// this session checked specific WRITE SITES in the game's own movement/
+	// physics code, all clean; this checks the object's own state at the
+	// earliest possible point in the tick (before anything in onEntityUpdate()
+	// itself runs) to catch the exact tick something -- most likely an
+	// out-of-bounds write from an entirely unrelated subsystem, given how many
+	// legitimate call sites have now been ruled out -- corrupts it.
+	if (isPlayer())
+	{
+		static bool s_dsiNoClipWasFalse = true;
+		const bool dsiNoClipNow = noClip;
+		if (dsiNoClipNow && s_dsiNoClipWasFalse)
+		{
+			MC_LOG_WARN("dsi", "onEntityUpdate: noClip unexpectedly true ticksExisted=%d posX=%.3f posY=%.3f posZ=%.3f motionX=%.6f motionY=%.6f motionZ=%.6f onGround=%d isDead=%d thisPtr=%p\n",
+				(int)ticksExisted, posX, posY, posZ, motionX, motionY, motionZ, (int)onGround, (int)isDead, (const void*)this);
+		}
+		s_dsiNoClipWasFalse = !dsiNoClipNow;
+	}
+#endif
 	if (ridingEntity != nullptr && ridingEntity->isDead)
 	{
 		ridingEntity = nullptr;
