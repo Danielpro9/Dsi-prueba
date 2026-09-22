@@ -1629,7 +1629,17 @@ bool RenderEngine::updateStaticProceduralTextureFx(TextureFX *texturefx)
 	bool &hasFrame = textureFxHasFrame[texturefx];
 	auto anaglyphIt = textureFxFrameAnaglyph.find(texturefx);
 	if (hasFrame && anaglyphIt != textureFxFrameAnaglyph.end() && anaglyphIt->second == anaglyph)
-		return true;
+	{
+		// Already uploaded this exact (static, unchanging) frame and the
+		// anaglyph state hasn't flipped since -- returning true here used to
+		// make the caller re-upload the identical fire/portal tile into the
+		// terrain/items atlas on every single tick regardless, which is what
+		// was driving the atlas back through paletted-quantization every
+		// tick for a texture that never actually changed. false tells the
+		// caller (which does `continue` on false) there is nothing new to
+		// push this tick.
+		return false;
+	}
 
 	if (fire && !hasFrame)
 	{
