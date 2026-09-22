@@ -1592,6 +1592,28 @@ void EntityLiving::onLivingUpdate()
 			}
 		}
 	}
+#if PLATFORM_DSI
+	// Closes out the bracket this round's diagnostics started: entry/exit of
+	// moveEntityWithHeading() and of Entity::onUpdate() both came back clean,
+	// leaving the entity-push-collision block just above (and addVelocity(),
+	// now instrumented directly) as the remaining untested code that runs
+	// between one tick's motion being fine and the next tick's moveEntity()
+	// finding it NaN. This is the end of onLivingUpdate() itself -- if motion
+	// is still bad here despite addVelocity()'s own check staying quiet, the
+	// corruption is neither addVelocity() nor anything reachable from this
+	// function this tick, and the search moves outside onLivingUpdate() again.
+	if (isPlayer())
+	{
+		static bool s_dsiMotionWasFiniteEnd = true;
+		const bool dsiFiniteAtEnd = std::isfinite(motionX) && std::isfinite(motionZ);
+		if (!dsiFiniteAtEnd && s_dsiMotionWasFiniteEnd)
+		{
+			MC_LOG_WARN("dsi", "onLivingUpdate: motion non-finite at end of function ticksExisted=%d onGround=%d\n",
+				(int)ticksExisted, (int)onGround);
+		}
+		s_dsiMotionWasFiniteEnd = dsiFiniteAtEnd;
+	}
+#endif
 }
 
 void EntityLiving::updatePotionEffects()

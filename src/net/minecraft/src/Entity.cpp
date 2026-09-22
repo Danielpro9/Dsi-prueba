@@ -1309,6 +1309,24 @@ void Entity::applyEntityCollision(Entity *entity)
 
 void Entity::addVelocity(double d, double d1, double d2)
 {
+#if PLATFORM_DSI
+	// Fall-through diagnostic, next iteration: neither the moveEntityWithHeading()
+	// entry/exit checks nor the Entity::onUpdate() bracket ever fired on a tick
+	// where motionX/motionZ were already NaN, which rules out everything inside
+	// onLivingUpdate() up to and including moveEntityWithHeading()'s own return.
+	// The one write site downstream of that this session hadn't looked at yet:
+	// onLivingUpdate()'s entity-push-collision block (after moveEntityWithHeading()
+	// returns, still inside onLivingUpdate()) calls entity->applyEntityCollision(),
+	// which calls this function on the player via `entity->addVelocity(d, 0.0, d1)`.
+	// addVelocity() is also this codebase's single general "add to motion" entry
+	// point (potions, knockback, water/lava push, etc.), so checking here catches
+	// any caller that hands it a non-finite delta, not just this one suspect.
+	if (isPlayer() && (!std::isfinite(d) || !std::isfinite(d2)))
+	{
+		MC_LOG_WARN("dsi", "addVelocity NaN: d=%.6f d1=%.6f d2=%.6f motionX=%.6f motionZ=%.6f ticksExisted=%d onGround=%d\n",
+			d, d1, d2, motionX, motionZ, (int)ticksExisted, (int)onGround);
+	}
+#endif
 	motionX += d;
 	motionY += d1;
 	motionZ += d2;
