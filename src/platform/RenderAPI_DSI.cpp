@@ -214,21 +214,9 @@ void convertRgba8ToDs(const std::uint8_t* src, std::uint16_t* dst, int pixelCoun
 // per texture load (and once per animated sub-image update, same as
 // convertRgba8ToDs() already does for every upload today -- not a new cost
 // pattern, the same one this file already accepts), not per frame.
-//
-// quantShift clears that many low bits off each 5-bit RGB555 channel before
-// dedup, so colours that only differ in a shade or two of anti-aliasing
-// collapse onto the same palette entry: shift 0 is exact (today's original
-// behaviour, unchanged for any texture that already fits in 255 colours --
-// gui.png/icons.png/particles.png all measured fitting exactly, so none of
-// them are affected), shift 4 leaves 2 levels per channel (8 colours total),
-// which always fits and is the last resort.
-enum class PalettedUploadResult { Success, ColorOverflow, SpaceExhausted };
-
-PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, int param,
-	int quantShift, std::size_t& outColorCount)
+bool tryUploadPaletted(int name, const DsiTexture& tex, int param)
 {
 	const std::size_t pixelCount = static_cast<std::size_t>(tex.width) * tex.height;
-	const std::uint8_t channelMask = static_cast<std::uint8_t>(~((1u << quantShift) - 1u) & 0x1Fu);
 
 	std::vector<std::int16_t> colorToIndex(32768, -1);
 	std::vector<std::uint16_t> palette;
@@ -246,18 +234,28 @@ PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, i
 			continue;
 		}
 
-		const std::uint8_t r = (src[i * 4 + 0] >> 3) & channelMask;
-		const std::uint8_t g = (src[i * 4 + 1] >> 3) & channelMask;
-		const std::uint8_t b = (src[i * 4 + 2] >> 3) & channelMask;
-		const std::uint16_t color15 = static_cast<std::uint16_t>(r | (g << 5) | (b << 10));
+		const std::uint8_t r = src[i * 4 + 0];
+		const std::uint8_t g = src[i * 4 + 1];
+		const std::uint8_t b = src[i * 4 + 2];
+		const std::uint16_t color15 = static_cast<std::uint16_t>(
+			(r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10));
 
 		std::int16_t index = colorToIndex[color15];
 		if (index < 0)
 		{
 			if (palette.size() >= 256)
 			{
-				outColorCount = palette.size();
-				return PalettedUploadResult::ColorOverflow;
+				// Diagnostic for the VRAM-exhaustion investigation: items.png/
+				// inventory.png fail to upload at all on real hardware ("texture
+				// VRAM must be full") while gui.png/icons.png/particles.png
+				// palette successfully (64KB each, confirmed by the resident-
+				// texture breakdown already logged elsewhere). Whether those two
+				// specifically overflow this 256-colour budget (forcing the
+				// costlier GL_RGBA fallback, which then may not fit at all) or
+				// hit a different failure was unverified -- this settles it.
+				MC_LOG_WARN("dsi", "palette overflow: %dx%d texture exceeds 255 distinct opaque colours (scanned %u/%u pixels)\n",
+					tex.width, tex.height, (unsigned)i, (unsigned)pixelCount);
+				return false; // More than 255 distinct opaque colours: doesn't fit this format.
 			}
 			index = static_cast<std::int16_t>(palette.size());
 			colorToIndex[color15] = index;
@@ -269,51 +267,19 @@ PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, i
 	glBindTexture(0, name);
 	const int uploaded = glTexImage2D(0, 0, GL_RGB256, tex.width, tex.height, 0,
 		param | GL_TEXTURE_COLOR0_TRANSPARENT, indices.data());
-	outColorCount = palette.size();
 	if (!uploaded)
-		return PalettedUploadResult::SpaceExhausted;
+	{
+		// Palette fit (255 colours or fewer), but the GPU still rejected the
+		// upload -- genuine VRAM space exhaustion even at the cheaper 1 byte/
+		// pixel cost, not a colour-count problem. Distinguishing this from the
+		// overflow case above is the point of this diagnostic.
+		MC_LOG_WARN("dsi", "paletted upload rejected: %dx%d, %u colours, GPU out of texture VRAM space\n",
+			tex.width, tex.height, (unsigned)palette.size());
+		return false;
+	}
 
 	glColorTableNtr(palette.size(), palette.data());
-	return PalettedUploadResult::Success;
-}
-
-// Diagnostic for the VRAM-exhaustion investigation confirmed items.png/
-// inventory.png specifically overflow the exact-colour palette (256x256,
-// thousands of distinct anti-aliased shades across a large item atlas) --
-// that is what forced them onto the costlier GL_RGBA path, which then did
-// not fit in whatever VRAM remained ("texture VRAM must be full"). Retrying
-// at coarser quantization keeps them on the cheap 1 byte/pixel path instead:
-// visibly flatter shading on that one texture, but a real, legible item
-// icon instead of the checkerboard placeholder real hardware was showing
-// before this. Bounded to 5 attempts (shift 0..4); shift 4 always fits (at
-// most 8 colours), so this cannot fail here -- SpaceExhausted is the only
-// early exit, since a coarser quantization does not change the byte
-// footprint (still 1 byte/pixel regardless of how many of the 256 slots are
-// used), only whether the colour count fits, so retrying after a genuine
-// GPU-out-of-space rejection would just fail again identically.
-bool tryUploadPaletted(int name, const DsiTexture& tex, int param)
-{
-	for (int quantShift = 0; quantShift <= 4; ++quantShift)
-	{
-		std::size_t colorCount = 0;
-		const PalettedUploadResult result = tryUploadPalettedAtDepth(name, tex, param, quantShift, colorCount);
-		if (result == PalettedUploadResult::Success)
-		{
-			if (quantShift > 0)
-				MC_LOG_WARN("dsi", "paletted upload used colour quantization (shift=%d, %u colours) to fit: %dx%d\n",
-					quantShift, (unsigned)colorCount, tex.width, tex.height);
-			return true;
-		}
-		if (result == PalettedUploadResult::SpaceExhausted)
-		{
-			MC_LOG_WARN("dsi", "paletted upload rejected: %dx%d, %u colours, GPU out of texture VRAM space\n",
-				tex.width, tex.height, (unsigned)colorCount);
-			return false;
-		}
-		MC_LOG_WARN("dsi", "palette overflow at shift=%d: %dx%d texture exceeds 255 distinct opaque colours%s\n",
-			quantShift, tex.width, tex.height, quantShift < 4 ? "; retrying with coarser colour quantization" : "");
-	}
-	return false; // Unreachable in practice: shift 4 always fits (at most 8 colours).
+	return true;
 }
 
 // Returns whether the DS GPU actually accepted this texture. glTexImage2D()
