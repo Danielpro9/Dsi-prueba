@@ -962,10 +962,56 @@ void Minecraft::run()
                     if (validateHeapThisFrame)
                         validateProcessHeap("before world render");
 
+#if PLATFORM_DSI
+                    // Fall-through diagnostic, next iteration: runTick()'s own
+                    // top-of-function check (added last round) shows the box already
+                    // corrupted before that tick's OWN player update ran, yet the
+                    // PRECEDING tick's own player-update diagnostics stayed clean --
+                    // meaning the corruption happens somewhere between one tick's
+                    // player update finishing and the next tick's runTick() starting.
+                    // That span covers two very different things: the rest of that
+                    // same tick's own processing (other entities, world tick --
+                    // both still inside runTick(), and already narrowed further by
+                    // checks there) OR this frame's world RENDER pass
+                    // (entityRenderer->updateCameraAndRender(), which is called from
+                    // here, entirely OUTSIDE runTick() and therefore invisible to
+                    // every tick-side check so far) -- chunk mesh building runs in
+                    // here (WorldRendererDsi.cpp's incremental updateRenderer(),
+                    // very active on a freshly loaded/still-streaming world) and has
+                    // never been instrumented. Bracket the render call itself.
+                    static bool s_dsiPreRenderWasFinite = true;
+                    bool dsiFiniteBeforeRender = true;
+                    if (thePlayer != nullptr)
+                    {
+                        dsiFiniteBeforeRender = std::isfinite(thePlayer->motionX) && std::isfinite(thePlayer->motionZ) &&
+                            std::isfinite(thePlayer->boundingBox->minX) && std::isfinite(thePlayer->boundingBox->minZ);
+                        if (!dsiFiniteBeforeRender && s_dsiPreRenderWasFinite)
+                        {
+                            MC_LOG_WARN("dsi", "Minecraft render: ALREADY non-finite before updateCameraAndRender ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
+                                (int)thePlayer->ticksExisted, thePlayer->motionX, thePlayer->motionZ,
+                                thePlayer->boundingBox->minX, thePlayer->boundingBox->minZ);
+                        }
+                        s_dsiPreRenderWasFinite = dsiFiniteBeforeRender;
+                    }
+#endif
                     const long_t clientRenderStartNs = System::nanoTime();
                     entityRenderer->updateCameraAndRender(timer->renderPartialTicks);
                     clientRenderNs = System::nanoTime() - clientRenderStartNs;
                     ClientProfiler::render(clientRenderNs);
+#if PLATFORM_DSI
+                    if (thePlayer != nullptr && dsiFiniteBeforeRender)
+                    {
+                        const bool dsiFiniteAfterRender = std::isfinite(thePlayer->motionX) && std::isfinite(thePlayer->motionZ) &&
+                            std::isfinite(thePlayer->boundingBox->minX) && std::isfinite(thePlayer->boundingBox->minZ);
+                        if (!dsiFiniteAfterRender)
+                        {
+                            MC_LOG_WARN("dsi", "Minecraft render: became non-finite DURING updateCameraAndRender ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
+                                (int)thePlayer->ticksExisted, thePlayer->motionX, thePlayer->motionZ,
+                                thePlayer->boundingBox->minX, thePlayer->boundingBox->minZ);
+                        }
+                        s_dsiPreRenderWasFinite = dsiFiniteAfterRender;
+                    }
+#endif
 
                     if (validateHeapThisFrame)
                     {
