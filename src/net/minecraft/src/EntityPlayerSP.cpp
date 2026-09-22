@@ -107,6 +107,11 @@ void EntityPlayerSP::onLivingUpdate()
 		MC_LOG_WARN("dsi", "EntityPlayerSP::onLivingUpdate: ALREADY non-finite at entry ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
 			(int)ticksExisted, motionX, motionZ, boundingBox->minX, boundingBox->minZ);
 	}
+	// Update the latch here too (not just in the pre-base-call check below,
+	// which only runs when entry was already finite): otherwise once entry
+	// goes bad once, s_dsiSPWasFinite never gets set false and this fires
+	// again every single tick from then on instead of once.
+	s_dsiSPWasFinite = dsiFiniteAtSPEntry;
 #endif
 	if (sprintingTicksLeft > 0)
 	{

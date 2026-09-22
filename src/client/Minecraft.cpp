@@ -3,6 +3,7 @@
 #include "net/minecraft/src/WorldInfo.h"
 #include "client/Minecraft.h"
 #include "platform/Log.h"
+#include <cmath>
 #include "platform/ConsoleAspectRatio.h"
 #include "platform/PlatformTuning.h"
 #include "platform/PlatformCompat.h"
@@ -1508,6 +1509,38 @@ void Minecraft::startCheckHasPaidThread()
 
 void Minecraft::runTick()
 {
+#if PLATFORM_DSI
+    // Fall-through diagnostic, next iteration: EntityPlayerSP::onLivingUpdate()'s
+    // own entry check (added last round) still shows the box ALREADY corrupted
+    // before that function's very first line runs -- even on a freshly loaded
+    // world at ticksExisted=41, with motionX/motionZ genuinely at rest (0.0) --
+    // which rules out that whole ~140-line pre-base block too, on top of every
+    // write site inside it already ruled out in earlier rounds. That leaves
+    // everything between one tick's player update and the next: the rest of
+    // THIS tick's own processing (chunk cache config, input, joinChunks,
+    // entityRenderer::updateRenderer(), other entities ticked before the
+    // player inside theWorld->updateEntities(), theWorld->tick(), rendering)
+    // and the same span of the PREVIOUS tick after its own player update
+    // returned. Check right here, at the very top of runTick(), before
+    // anything in it runs: if this is already bad, the corruption sits
+    // somewhere in that shared span across two ticks; if it is still fine
+    // here but bad by the time updateEntities() reaches the player, the
+    // window narrows to this tick's own input/chunk-cache/render-update code
+    // that runs between here and there.
+    if (thePlayer != nullptr)
+    {
+        static bool s_dsiRunTickWasFinite = true;
+        const bool dsiFiniteAtRunTickTop = std::isfinite(thePlayer->motionX) && std::isfinite(thePlayer->motionZ) &&
+            std::isfinite(thePlayer->boundingBox->minX) && std::isfinite(thePlayer->boundingBox->minZ);
+        if (!dsiFiniteAtRunTickTop && s_dsiRunTickWasFinite)
+        {
+            MC_LOG_WARN("dsi", "Minecraft::runTick: ALREADY non-finite at very top ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
+                (int)thePlayer->ticksExisted, thePlayer->motionX, thePlayer->motionZ,
+                thePlayer->boundingBox->minX, thePlayer->boundingBox->minZ);
+        }
+        s_dsiRunTickWasFinite = dsiFiniteAtRunTickTop;
+    }
+#endif
     if (rightClickDelayTimer > 0)
         --rightClickDelayTimer;
 
