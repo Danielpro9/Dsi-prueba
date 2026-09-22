@@ -118,4 +118,24 @@
 #undef  PLATFORM_INCREMENTAL_CHUNK_SAVE_LIMIT
 #define PLATFORM_INCREMENTAL_CHUNK_SAVE_LIMIT    2
 
+// Ambient world particles (torch flame, lava drip, portal sparkle, ...):
+// World::randomDisplayUpdates() probes PLATFORM_RANDOM_DISPLAY_PROBES nearby
+// block positions every tick (6 RNG draws + a block lookup each) purely to
+// decide whether to spawn one of these. PS2 already cut this from vanilla's
+// 1000 probes to 250 (see the "347 ms slowTick=randomDisplay spike" comment
+// in Ps2WorldTuning.h) but left the feature itself on, and DSi inherited
+// that 250-probe value wholesale. Real-hardware reports from this port
+// (also on Wii, which has more headroom than either of these) still show
+// randomDisplay costing 110+ ms a tick even at 250 probes -- user-reported,
+// specifically noticeable while falling through the world (the still-open
+// fall-through-the-floor bug this session is chasing), on hardware with by
+// far the least CPU/memory budget of the three. PLATFORM_SKIP_WORLD_PARTICLES
+// already exists for exactly this: World::randomDisplayUpdates() returns
+// immediately when it is set, skipping the probe loop entirely rather than
+// running it and discarding every result. DSi-only: PS2/Wii keep whatever
+// ambient particle density they already have, since this is not a change
+// either of those platforms asked for.
+#undef  PLATFORM_SKIP_WORLD_PARTICLES
+#define PLATFORM_SKIP_WORLD_PARTICLES             1
+
 #endif // PLATFORM_DSI
