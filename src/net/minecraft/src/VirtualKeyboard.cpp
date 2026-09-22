@@ -60,7 +60,6 @@ void VirtualKeyboard::notifyFocus(GuiTextField* field, bool focused)
 	else if (focusedField == field)
 	{
 		focusedField = nullptr;
-		platformNotifyTextInputClosed();
 	}
 	platformSetTextInputExclusive(focusedField != nullptr);
 }

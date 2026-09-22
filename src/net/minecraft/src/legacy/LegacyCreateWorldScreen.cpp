@@ -316,7 +316,7 @@ void LegacyCreateWorldScreen::moveSelection(int_t direction)
 void LegacyCreateWorldScreen::updateScreen()
 {
     GuiCreateWorld::updateScreen();
-#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
+#if PLATFORM_PS2 || PLATFORM_WII
     // The virtual keyboard owns the console text-input snapshot while a field is
     // focused. Do not let menu navigation consume the same presses underneath it.
     if (platformTextInputExclusive())
@@ -339,37 +339,15 @@ void LegacyCreateWorldScreen::updateScreen()
         adjustSelection(-1);
     else if ((pad.pressed & PLATFORM_TEXT_RIGHT) != 0)
         adjustSelection(1);
-#if PLATFORM_PS2 || PLATFORM_DSI
-    // DSi has no menu pointer either (platformMenuPointerActive() is always
-    // false there -- see InputBackend_DSI.cpp), so it takes PS2's
-    // unconditional branch rather than Wii's pointer-aware one below.
+#if PLATFORM_PS2
     if ((pad.pressed & PLATFORM_TEXT_TYPE) != 0)
         activateSelection();
 #elif PLATFORM_WII
     if (!platformMenuPointerActive() && (pad.pressed & PLATFORM_TEXT_TYPE) != 0)
         activateSelection();
 #endif
-#if PLATFORM_WII || PLATFORM_DSI
-    // DSi's B is this hardware's one cancel/back button (mapTextButtons() in
-    // InputBackend_DSI.cpp sets both PLATFORM_TEXT_BACK and _CLOSE for it),
-    // so checking BACK here matches Wii's shape rather than PS2's CLOSE check
-    // just above.
-    //
-    // DSi-specific hazard this shares with Wii's own identical-looking check
-    // below: GuiScreen::handleInput() drives VirtualKeyboard::instance().tick()
-    // strictly before currentScreen->updateScreen() runs, every tick (see
-    // Minecraft::runTick()). If the same B press that just closed a focused
-    // field (VirtualKeyboard consuming PLATFORM_TEXT_CLOSE) is read again here
-    // moments later in that same tick, exclusivity has already cleared by
-    // then, so this BACK check would fire on the very press that closed the
-    // keyboard, exiting the whole screen instead of just dismissing it -- and
-    // unlike Wii/PS2, DSi's single B button sets BOTH bits on this exact
-    // press (see mapTextButtons()), so this is not a Wii/PS2 concern despite
-    // living in a shared #if. platformConsumeTextInputJustClosed() (Input.h)
-    // is a one-shot flag VirtualKeyboard::notifyFocus() sets on close and this
-    // reads and clears in the same call, so it only ever suppresses the exact
-    // press that closed the field, never a later, real BACK press.
-    if ((pad.pressed & PLATFORM_TEXT_BACK) != 0 && !platformConsumeTextInputJustClosed())
+#if PLATFORM_WII
+    if ((pad.pressed & PLATFORM_TEXT_BACK) != 0)
     {
         mc->sndManager->playSoundFX("random.back", 1.0f, 1.0f);
         mc->displayGuiScreen(parentScreen);

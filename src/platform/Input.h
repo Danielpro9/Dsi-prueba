@@ -59,23 +59,6 @@ bool platformTextInputExclusive();
 void platformSetContainerNavigationActive(bool active);
 bool platformContainerNavigationActive();
 
-// One-shot flag: set when a focused text field unfocuses (VirtualKeyboard
-// closing on a BACK/CLOSE press). platformTextInputExclusive() already stops
-// a screen's own navigation from reading pad state while a field is focused,
-// but on DSi that guard alone is not enough for the specific press that closes
-// the keyboard: DSi's single B button sets both PLATFORM_TEXT_BACK and
-// PLATFORM_TEXT_CLOSE at once (see InputBackend_DSI.cpp's mapTextButtons()),
-// and GuiScreen::handleInput() drives VirtualKeyboard::tick() (which consumes
-// CLOSE, clearing exclusivity) strictly before a screen's own updateScreen()
-// runs in the same tick (see Minecraft::runTick()) -- so a screen reading
-// PLATFORM_TEXT_BACK right after exclusivity clears sees the very same press
-// that just closed the keyboard, not a fresh one. A screen whose own
-// navigation reacts to BACK should check this before doing so, and it is
-// consumed (reset to false) on read so it never affects a later, real BACK
-// press.
-void platformNotifyTextInputClosed();
-bool platformConsumeTextInputJustClosed();
-
 // Set while a Controls-menu binding is "listening" for a new key. Console pad
 // pollers check this to suspend their normal button-to-UI synthesis (menu
 // confirm/cancel/scroll) and instead report a raw button press as a synthetic
