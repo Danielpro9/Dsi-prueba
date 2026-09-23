@@ -165,16 +165,7 @@ void GuiContainerCreative::handleMouseInput()
 
 Slot *GuiContainerCreative::getControllerNavigationTarget(Slot *selected, int_t dirX, int_t dirY)
 {
-#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
-	// DSi report: the D-pad could not reach items past the first visible page
-	// of the creative inventory -- this override (row-to-row navigation, plus
-	// scrollRows()/hotbar-step at the grid's top/bottom edge) is what PS2/Wii
-	// already use for exactly that, missing DSi from this guard only. No
-	// DSi-specific chord needed: the D-pad is free while any GuiScreen is
-	// open (gameplay movement is not processed then), so plain Up/Down here
-	// behaves identically to PS2/Wii -- consistent with the rest of
-	// ContainerSlotNavigator's DSi wiring, which already reuses this same
-	// mechanism unmodified.
+#if PLATFORM_PS2 || PLATFORM_WII
     if (selected == nullptr || selected->getInventory() != &inventory || inventorySlots == nullptr)
         return nullptr;
 
