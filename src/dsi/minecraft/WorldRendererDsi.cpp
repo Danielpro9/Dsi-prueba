@@ -81,6 +81,7 @@
 #include "net/minecraft/src/ChunkCache.h"
 #include "net/minecraft/src/TileEntity.h"
 #include "net/minecraft/src/TileEntityRenderer.h"
+#include "dsi/minecraft/DsiCapturedMeshRepack.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -339,6 +340,13 @@ bool WorldRenderer::dsiBuildRendererStep(int_t blockBudget)
 			mesh.hasBrightness = dsiBuildHasBrightness[dsiBuildPass];
 			mesh.brightnessOffset = 28;
 			renderStaticMeshCompile(dsiStagingMesh[dsiBuildPass], mesh);
+			// One-time cost here (chunk build) instead of every one of the
+			// many frames this section is drawn before its next rebuild --
+			// see dsiRepackCapturedMeshFast()'s own comment for the full why.
+			// Safe to call even though the mesh isn't published to
+			// dsiLiveMesh yet (see the comment above): it only touches
+			// dsiStagingMesh's own captured buffer, in place.
+			dsiRepackCapturedMeshFast(dsiStagingMesh[dsiBuildPass].captured);
 		}
 		else
 		{

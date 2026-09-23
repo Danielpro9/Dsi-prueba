@@ -186,6 +186,14 @@ struct RenderCapturedMesh
     bool hasBrightness = false;
     int brightnessOffset = 0;
 
+    // DSi-only (RenderAPI_DSI.cpp's dsiRepackCapturedMeshFast()): true once
+    // this mesh's position field has been converted from float3 to the DS
+    // GPU's native v16 fixed-point format in place. Every other backend
+    // leaves this at its default (false) and ignores it; harmless dead
+    // weight there (one bool per captured mesh), same as positionShort
+    // already is for backends that never set it.
+    bool positionIsV16 = false;
+
     bool empty() const { return vertexCount <= 0 || raw.empty(); }
     std::size_t byteSize() const { return raw.size() * sizeof(std::int32_t); }
     void clear()
@@ -203,6 +211,7 @@ struct RenderCapturedMesh
         normalOffset = 0;
         hasBrightness = false;
         brightnessOffset = 0;
+        positionIsV16 = false;
     }
 };
 

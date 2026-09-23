@@ -2,6 +2,7 @@
 
 #include "platform/RenderAPI.h"
 #include "platform/Log.h"
+#include "dsi/minecraft/DsiCapturedMeshRepack.h"
 
 #include <nds.h>
 #include <algorithm>
@@ -716,12 +717,29 @@ std::size_t dsiTextureVramBytes(int name)
 // -----------------------------------------------------------------------------
 // Static / captured mesh replay -- VERIFIED per-call mapping (glBegin/
 // glVertex3f/glTexCoord2f/glColor3b), APPROXIMATED overall performance: this
-// re-issues one GL call per vertex per frame instead of compiling to a native
-// display list, matching PS2's non-native-terrain-pipeline path (see
+// still re-issues one GL call per vertex per frame instead of compiling to a
+// native GPU command list (glCallList() takes a pre-packed FIFO buffer this
+// engine does not build -- that would be the next step up, replaying a whole
+// section with one async DMA'd call instead of N immediate-mode ones), the
+// same limitation PS2's non-native-terrain-pipeline path has (see
 // PLATFORM_NATIVE_TERRAIN_PIPELINE in PlatformConfig.h, left off for DSi).
+// What IS precomputed now: a captured mesh's position data is converted to
+// the GPU's native v16 fixed-point format once, when the mesh is captured
+// (a chunk build), not on every one of the frames it is replayed across
+// before the next rebuild -- see renderCaptureInterleaved()/
+// drawCapturedMeshFast() below for why and the exact split.
 // -----------------------------------------------------------------------------
 namespace
 {
+
+// Every vertex position this engine submits goes through the same v16
+// pre-scale dance -- see the full story where drawInterleavedMesh() uses
+// these below. Hoisted to file scope so renderCaptureInterleaved()'s
+// capture-time conversion (below) and this function's own draw-time
+// conversion (for one-shot/dynamic meshes, which have no earlier "capture"
+// step to move the cost into) apply the exact same constants.
+constexpr float kVertexScale = 256.0f;
+constexpr float kInvVertexScale = 1.0f / kVertexScale;
 
 // A Minecraft interleaved vertex is always float3 position, float2 texcoord,
 // RGBA8 colour, signed-byte3 normal, in whatever subset the mesh's hasTexture/
@@ -833,15 +851,14 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 	// every vertex-submitting draw in this engine (GL_PROJECTION is only
 	// touched briefly for camera/ortho setup, never held across a
 	// Tessellator draw).
-	constexpr float kVertexScale = 256.0f;
-	// Multiply by the reciprocal instead of dividing by kVertexScale below:
-	// same result (kVertexScale is an exact power of two, so this reciprocal
-	// is exact too, no precision lost), but division is one of the slower
-	// operations a *hardware* FPU has, and this ARM9 (arm946e-s+nofp) has no
-	// FPU at all -- every one of these was a soft-float library call, three
-	// per vertex, every vertex, every draw call in the whole engine. Real
-	// cost on a menu screen's text batch alone (a few hundred vertices).
-	constexpr float kInvVertexScale = 1.0f / kVertexScale;
+	// kVertexScale/kInvVertexScale: file-scope now (see above) -- multiplying
+	// by the reciprocal instead of dividing below is the same result
+	// (kVertexScale is an exact power of two, so this reciprocal is exact
+	// too, no precision lost), but division is one of the slower operations
+	// a *hardware* FPU has, and this ARM9 (arm946e-s+nofp) has no FPU at all
+	// -- every one of these was a soft-float library call, three per vertex,
+	// every vertex, every draw call in the whole engine. Real cost on a menu
+	// screen's text batch alone (a few hundred vertices).
 	glPushMatrix();
 	glScalef(kVertexScale, kVertexScale, kVertexScale);
 
@@ -992,6 +1009,28 @@ bool renderDrawInterleaved(const RenderInterleavedMesh& mesh)
 	return drawInterleavedMesh(mesh);
 }
 
+// Verbatim byte-copy of the source interleaved buffer -- deliberately NOT
+// pre-converting position here (see dsiRepackCapturedMeshFast() below for
+// where that actually happens and why not here). This function has two
+// different callers with two different expectations of its output format,
+// and only one of them wants a converted result:
+//   * platform/RenderStaticMesh.cpp's renderStaticMeshCompile(), for a
+//     FINISHED mesh a caller is about to start replaying every frame --
+//     this is the one dsiRepackCapturedMeshFast() targets, but it does so
+//     as an explicit extra step the caller takes AFTER this returns (see
+//     WorldRendererDsi.cpp's dsiBuildRendererStep()), not inside here.
+//   * Tessellator::capture() (Tessellator.cpp), used by
+//     WorldRendererDsi.cpp's incremental chunk builder purely to pull one
+//     BOUNDED STEP's worth of vertices out of the live Tessellator buffer
+//     into a vector it accumulates across many steps (dsiBuildRawBuffer) --
+//     then re-wraps that accumulated buffer as a fresh RenderInterleavedMesh
+//     with hardcoded stride/offsets (32/12/20/28, Tessellator's own fixed
+//     layout) and feeds it back through renderStaticMeshCompile(). If this
+//     function pre-converted position, that reused raw buffer would already
+//     be in the converted format and the hardcoded offsets/stride on the
+//     second pass would misread it -- silently, since both are just
+//     same-sized int32 words to memcpy. Keeping this a pure byte mirror
+//     keeps both callers' existing assumptions intact.
 bool renderCaptureInterleaved(const RenderInterleavedMesh& mesh, RenderCapturedMesh& out, bool append)
 {
 	if (!mesh.data || mesh.count <= 0 || mesh.stride <= 0)
@@ -1020,31 +1059,210 @@ bool renderCaptureInterleaved(const RenderInterleavedMesh& mesh, RenderCapturedM
 	out.normalOffset = mesh.normalOffset;
 	out.hasBrightness = mesh.hasBrightness;
 	out.brightnessOffset = mesh.brightnessOffset;
+	// positionIsV16 deliberately left at its default (false): see the
+	// function banner above and dsiRepackCapturedMeshFast() below.
 
 	return true;
 }
 
-bool renderDrawCaptured(const RenderCapturedMesh& mesh)
+// The actual optimization: converts a captured mesh's position field from
+// float3 to an already-GPU-native v16 triple, in place, ONE TIME -- called
+// only by WorldRendererDsi.cpp, only on a section's finished, about-to-be-
+// published mesh (dsiStagingMesh[pass].captured right after
+// renderStaticMeshCompile() succeeds), never on the intermediate per-step
+// buffers renderCaptureInterleaved() above also serves. Safe to call blind:
+// positionIsV16 makes it idempotent, and position is always exactly the
+// first 12 bytes of every vertex in this engine's interleaved convention
+// (there is no separate "position offset" field anywhere in RenderAPI.h --
+// drawInterleavedMesh() itself always reads it from vertex+0), so this
+// changes nothing about the mesh's stride or any other field's offset: 3
+// floats in, 3 pre-widened v16 ints out, both exactly 12 bytes.
+//
+// Why this matters: floattov16() (nds/arm9/videoGL.h: `(v16)((n) * (1<<12))`)
+// is a genuine float multiply -- soft-float on this ARM9, which has no FPU
+// at all (arm946e-s+nofp) -- and drawInterleavedMesh()'s glVertex3f() does
+// three of them (via kInvVertexScale then floattov16 again inside libnds)
+// for EVERY vertex, EVERY frame a mesh is drawn. A captured terrain
+// section's positions never change between this call and the next rebuild
+// (a block edit, or the section streaming in/out of render distance) --
+// typically hundreds of frames later -- so paying that conversion once here
+// instead of every one of those frames is a straight win with no behaviour
+// change: glVertex3v16() (libnds's own doc comment on glVertex3f(): "Float
+// version! Please, use glVertex3v16() instead.") reproduces the identical
+// GPU-side value from the pre-converted ints that glVertex3f() would have
+// computed fresh each time.
+//
+// Texture coordinates are NOT converted the same way here: glTexCoord2f()
+// scales by the CURRENTLY BOUND texture's width/height (libnds's videoGL.c),
+// which is not necessarily fixed at repack time for every captured mesh
+// this engine has (RenderExtraTerrainMeshes rebinds a different texture per
+// group) -- baking that in now without also plumbing the bound texture's
+// size through would be a real, if less frequent, correctness risk. Left as
+// the float path (drawCapturedMeshFast() below still calls glTexCoord2f()
+// per vertex) -- a real but smaller remaining cost than position (1 call vs.
+// 3 per vertex) and the next thing to revisit if a texture-size-aware
+// version of this is worth the added complexity.
+void dsiRepackCapturedMeshFast(RenderCapturedMesh& mesh)
+{
+	if (mesh.empty() || mesh.positionIsV16)
+		return;
+
+	std::uint8_t* raw = reinterpret_cast<std::uint8_t*>(mesh.raw.data());
+	for (int i = 0; i < mesh.vertexCount; ++i)
+	{
+		std::uint8_t* vertex = raw + (std::size_t)i * mesh.stride;
+		float position[3];
+		std::memcpy(position, vertex, sizeof(position));
+		const std::int32_t posV16[3] = {
+			floattov16(position[0] * kInvVertexScale),
+			floattov16(position[1] * kInvVertexScale),
+			floattov16(position[2] * kInvVertexScale),
+		};
+		std::memcpy(vertex, posV16, sizeof(posV16));
+	}
+	mesh.positionIsV16 = true;
+}
+
+namespace
+{
+
+// Draw-time counterpart of drawInterleavedMesh() above, for captured meshes:
+// identical per-vertex colour/lightmap/normal/texcoord handling (kept in
+// sync by hand -- the two diverge only in how position reaches the GPU).
+// mesh.positionIsV16 tells this which of two sources drove the capture: a
+// section dsiRepackCapturedMeshFast() already converted (take the pre-
+// converted v16 triple straight off the buffer, glVertex3v16(), no
+// per-frame float math), or anything else that goes through the generic
+// RenderStaticMesh path without that extra step -- RenderGlobal.cpp's sky/
+// star meshes, GuiIngame.cpp's HUD caches -- which still carries plain
+// float position and needs the same conversion drawInterleavedMesh() does.
+bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 {
 	if (mesh.empty())
 		return false;
 
-	RenderInterleavedMesh view;
-	view.data = mesh.raw.data();
-	view.stride = mesh.stride;
-	view.first = 0;
-	view.count = mesh.vertexCount;
-	view.primitive = mesh.primitive;
-	view.positionShort = mesh.positionShort;
-	view.hasTexture = mesh.hasTexture;
-	view.texCoordOffset = mesh.texCoordOffset;
-	view.hasColor = mesh.hasColor;
-	view.colorOffset = mesh.colorOffset;
-	view.hasNormals = mesh.hasNormals;
-	view.normalOffset = mesh.normalOffset;
-	view.hasBrightness = mesh.hasBrightness;
-	view.brightnessOffset = mesh.brightnessOffset;
-	return drawInterleavedMesh(view);
+	const std::uint8_t* base = reinterpret_cast<const std::uint8_t*>(mesh.raw.data());
+
+	// Same translucency approximation as drawInterleavedMesh() -- see its
+	// own comment on why first+last vertex alpha is sampled, not scanned.
+	if (mesh.hasColor)
+	{
+		std::uint8_t alphaFirst;
+		std::memcpy(&alphaFirst, base + mesh.colorOffset + 3, sizeof(alphaFirst));
+		std::uint8_t alphaLast = alphaFirst;
+		if (mesh.vertexCount > 1)
+			std::memcpy(&alphaLast, base + (std::size_t)(mesh.vertexCount - 1) * mesh.stride + mesh.colorOffset + 3, sizeof(alphaLast));
+		const unsigned int alphaSum = static_cast<unsigned int>(alphaFirst) + static_cast<unsigned int>(alphaLast);
+		const float averageAlpha = static_cast<float>(alphaSum) / (255.0f * 2.0f);
+		g_poly.alpha31 = static_cast<std::uint8_t>(averageAlpha * 31.0f + 0.5f);
+		markPolyDirty();
+	}
+
+	applyPolyFormatIfDirty();
+
+	GL_GLBEGIN_ENUM glPrimitive = GL_TRIANGLES;
+	switch (mesh.primitive)
+	{
+		case RenderPrimitive::Triangles:
+		case RenderPrimitive::TriangleStrip:
+		case RenderPrimitive::TriangleFan:
+			glPrimitive = GL_TRIANGLES;
+			break;
+		case RenderPrimitive::Quads:
+			glPrimitive = GL_QUADS;
+			break;
+		default:
+			return false;
+	}
+
+	glPushMatrix();
+	glScalef(kVertexScale, kVertexScale, kVertexScale);
+
+	bool haveLastColor = false;
+	std::uint8_t lastColorR = 0, lastColorG = 0, lastColorB = 0;
+	auto emitColorIfChanged = [&](std::uint8_t r, std::uint8_t g, std::uint8_t b)
+	{
+		if (haveLastColor && r == lastColorR && g == lastColorG && b == lastColorB)
+			return;
+		glColor3b(r, g, b);
+		lastColorR = r;
+		lastColorG = g;
+		lastColorB = b;
+		haveLastColor = true;
+	};
+
+	const bool positionIsV16 = mesh.positionIsV16;
+
+	glBegin(glPrimitive);
+	for (int i = 0; i < mesh.vertexCount; ++i)
+	{
+		const std::uint8_t* vertex = base + (std::size_t)i * mesh.stride;
+
+		bool haveLightmapColor = false;
+		std::uint8_t lightmapR = 255, lightmapG = 255, lightmapB = 255;
+		if (mesh.hasBrightness)
+		{
+			float uv[2];
+			std::memcpy(uv, vertex + mesh.brightnessOffset, sizeof(uv));
+			haveLightmapColor = lightmapColorAt(uv[0], uv[1], lightmapR, lightmapG, lightmapB);
+		}
+		if (mesh.hasColor)
+		{
+			std::uint8_t rgba[4];
+			std::memcpy(rgba, vertex + mesh.colorOffset, sizeof(rgba));
+			if (haveLightmapColor)
+			{
+				emitColorIfChanged(static_cast<std::uint8_t>((static_cast<int>(lightmapR) * rgba[0]) / 255),
+				                   static_cast<std::uint8_t>((static_cast<int>(lightmapG) * rgba[1]) / 255),
+				                   static_cast<std::uint8_t>((static_cast<int>(lightmapB) * rgba[2]) / 255));
+			}
+			else
+			{
+				emitColorIfChanged(rgba[0], rgba[1], rgba[2]);
+			}
+		}
+		else if (haveLightmapColor)
+		{
+			emitColorIfChanged(lightmapR, lightmapG, lightmapB);
+		}
+		if (mesh.hasNormals)
+		{
+			constexpr float kInvNormalScale = 1.0f / 127.0f;
+			std::int8_t normal[3];
+			std::memcpy(normal, vertex + mesh.normalOffset, sizeof(normal));
+			glNormal3f(normal[0] * kInvNormalScale, normal[1] * kInvNormalScale, normal[2] * kInvNormalScale);
+		}
+		if (mesh.hasTexture)
+		{
+			float uv[2];
+			std::memcpy(uv, vertex + mesh.texCoordOffset, sizeof(uv));
+			glTexCoord2f(uv[0], uv[1]);
+		}
+
+		if (positionIsV16)
+		{
+			std::int32_t posV16[3];
+			std::memcpy(posV16, vertex, sizeof(posV16));
+			glVertex3v16(static_cast<v16>(posV16[0]), static_cast<v16>(posV16[1]), static_cast<v16>(posV16[2]));
+		}
+		else
+		{
+			float position[3];
+			std::memcpy(position, vertex, sizeof(position));
+			glVertex3f(position[0] * kInvVertexScale, position[1] * kInvVertexScale, position[2] * kInvVertexScale);
+		}
+	}
+	glEnd();
+	glPopMatrix(1);
+
+	return true;
+}
+
+} // namespace
+
+bool renderDrawCaptured(const RenderCapturedMesh& mesh)
+{
+	return drawCapturedMeshFast(mesh);
 }
 
 // -----------------------------------------------------------------------------
