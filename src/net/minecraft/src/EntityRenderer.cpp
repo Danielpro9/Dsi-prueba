@@ -476,10 +476,34 @@ void EntityRenderer::updateLightmap()
                                                (static_cast<uint_t>(g) << 8) | static_cast<uint_t>(b));
     }
 
-#if defined(PS2_PLATFORM)
+#if defined(PS2_PLATFORM) || defined(DSI_PLATFORM)
+    // Real-hardware root cause found this round: RenderAPI_DSI.cpp's whole
+    // "bake the lightmap into the per-vertex colour" scheme (see its own
+    // long comment block -- built because this hardware has only one
+    // texture unit, no second unit free for a real lightmap sampler) reads
+    // its lightmap data from g_lightmapColors, which is ONLY ever populated
+    // by renderSetLightmapColors() -- and this call was gated PS2-only,
+    // never DSI, even though RenderAPI_DSI.cpp implements the exact same
+    // vertex-colour-bake approach PS2 uses (copied from it, per that file's
+    // own comments) and needs the exact same call. So on DSi this 256-entry
+    // lightmap (real sky/block/daylight/torch-flicker values, computed
+    // just above -- identical to what every other platform already gets)
+    // was computed every tick and then simply never reached the renderer:
+    // g_lightmapColors stayed permanently empty, applyLightmapColorAt()
+    // no-opped on every single call, and every tinted or lit face fell
+    // back to its raw, completely undarkened colour regardless of time of
+    // day, torches, or caves -- not merely the "lightmap gets overwritten
+    // by the tint colour" ordering bug found and fixed two rounds ago (a
+    // real bug, but one that was firing against an already-empty lightmap
+    // the whole time), the lightmap was never wired up for this platform
+    // at all. This is almost certainly the real explanation for water
+    // still reading as flat white and terrain looking flat/undetailed
+    // after both of those earlier fixes: there was never any day/night or
+    // local-light darkening for either to apply in the first place.
     renderSetLightmapColors(reinterpret_cast<const std::uint32_t*>(lightmapColors.data()),
                             static_cast<int>(lightmapColors.size()));
-
+#endif
+#if defined(PS2_PLATFORM)
     const int terrainLightBucket = ps2TerrainDaylightBucket(daylight);
     const bool lightningActive = world->field_27172_i > 0;
     const bool initialized = ps2TerrainLightBucket >= 0;
@@ -491,7 +515,12 @@ void EntityRenderer::updateLightmap()
     }
     ps2TerrainLightBucket = terrainLightBucket;
     ps2TerrainLightningActive = lightningActive;
-#else
+#elif !defined(DSI_PLATFORM)
+    // DSi never allocates a real lightmapTexture (no second texture unit to
+    // sample one from -- see the vertex-colour-bake comment above), so
+    // lightmapTexture stays < 0 here and this would be a silent no-op
+    // anyway; excluded explicitly so it reads as "not needed on this
+    // platform" rather than "happens to fail its own guard".
     if (lightmapTexture >= 0)
         mc->renderEngine->updateTextureSubImage(lightmapColors, 16, 16, lightmapTexture);
 #endif
