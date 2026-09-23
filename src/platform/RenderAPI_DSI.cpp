@@ -845,6 +845,37 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 	glPushMatrix();
 	glScalef(kVertexScale, kVertexScale, kVertexScale);
 
+	// Real-hardware performance regression this fixes: wiring up the lightmap
+	// (see the hasBrightness/hasColor combine below) means a real glColor3b()
+	// GPU FIFO write now happens for essentially every terrain vertex --
+	// before that fix, an untinted lit vertex (mesh.hasBrightness but not
+	// mesh.hasColor -- most block faces: dirt, stone, wood, anything without
+	// a biome tint) issued NO colour command at all, since g_lightmapColors
+	// was always empty and the whole branch below was unreachable. Frame
+	// times roughly tripled once every one of those vertices started writing
+	// GFX_COLOR. glColor3b() itself is one cheap register write, but this
+	// hardware's geometry engine processes its command FIFO asynchronously
+	// and can stall the CPU on a write if that FIFO is full -- plausible
+	// given the FIFO now receives one extra command per vertex across an
+	// entire visible chunk radius, every frame. Many adjacent vertices in a
+	// flat, uniformly-lit face share the exact same final colour (same
+	// lightmap bucket, no per-vertex tint), so track the last colour this
+	// draw call actually issued and skip re-sending it when the next vertex
+	// computes the identical value -- redundant state changes cost real FIFO
+	// bandwidth for zero visual difference.
+	bool haveLastColor = false;
+	std::uint8_t lastColorR = 0, lastColorG = 0, lastColorB = 0;
+	auto emitColorIfChanged = [&](std::uint8_t r, std::uint8_t g, std::uint8_t b)
+	{
+		if (haveLastColor && r == lastColorR && g == lastColorG && b == lastColorB)
+			return;
+		glColor3b(r, g, b);
+		lastColorR = r;
+		lastColorG = g;
+		lastColorB = b;
+		haveLastColor = true;
+	};
+
 	glBegin(glPrimitive);
 	for (int i = 0; i < mesh.count; ++i)
 	{
@@ -888,13 +919,13 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 			std::memcpy(rgba, vertex + mesh.colorOffset, sizeof(rgba));
 			if (haveLightmapColor)
 			{
-				glColor3b(static_cast<std::uint8_t>((static_cast<int>(lightmapR) * rgba[0]) / 255),
-				          static_cast<std::uint8_t>((static_cast<int>(lightmapG) * rgba[1]) / 255),
-				          static_cast<std::uint8_t>((static_cast<int>(lightmapB) * rgba[2]) / 255));
+				emitColorIfChanged(static_cast<std::uint8_t>((static_cast<int>(lightmapR) * rgba[0]) / 255),
+				                   static_cast<std::uint8_t>((static_cast<int>(lightmapG) * rgba[1]) / 255),
+				                   static_cast<std::uint8_t>((static_cast<int>(lightmapB) * rgba[2]) / 255));
 			}
 			else
 			{
-				glColor3b(rgba[0], rgba[1], rgba[2]);
+				emitColorIfChanged(rgba[0], rgba[1], rgba[2]);
 			}
 		}
 		else if (haveLightmapColor)
@@ -905,7 +936,7 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 			// avoidable software-float cost on this FPU-less ARM9, paid on
 			// every untinted (no mesh.hasColor) lit vertex, i.e. most block
 			// faces in the world every single frame.
-			glColor3b(lightmapR, lightmapG, lightmapB);
+			emitColorIfChanged(lightmapR, lightmapG, lightmapB);
 		}
 		if (mesh.hasNormals)
 		{
@@ -1485,7 +1516,33 @@ bool renderSupportsFeature(RenderFeature feature)
 {
 	switch (feature)
 	{
-		case RenderFeature::Mipmaps: return true; // glTexImageNtr2D supports mip levels.
+		// Real-hardware bug found this round, likely contributing to the
+		// "blocks show a flat colour, no texture detail" reports: this used
+		// to claim Mipmaps support because glTexImageNtr2D() (the libnds
+		// function) CAN take mip levels -- but nothing in this file actually
+		// wires that up. renderTextureBeginUpload()'s nativeMaxLevel argument
+		// is unnamed/ignored, uploadTexture()'s glTexImage2D() calls never
+		// set any mip-count bit in their param, and renderTextureImageRgba()
+		// explicitly drops every call with level != 0. Claiming support here
+		// is what made Config::getMipmapLevel() return a real nonzero level
+		// at all: DSi has no PLATFORM_DEFAULT_MIPMAP_LEVEL override of its
+		// own (see PlatformGameTuning.h's `#if PLATFORM_PS2 || PLATFORM_DSI`
+		// block), so it silently inherited PS2's default of 2 -- a value
+		// that only makes sense on PS2's real native mip-level upload path.
+		// On DSi that default did two things, both bad: RenderEngine.cpp
+		// spent real CPU building a 2-level downsampled mip chain for
+		// terrain.png/gui/items.png on every load, for levels this backend
+		// then throws away unread (wasted work, not what the user asked to
+		// optimize but exactly that kind of cost); and it left the DS GPU's
+		// texture object configured with size/format bytes computed off an
+		// unfulfilled multi-level expectation instead of the single flat
+		// level this backend actually uploads, which is the kind of
+		// mismatch that produces wrong/flat-looking sampled colour, not
+		// missing geometry or a crash -- consistent with what was reported.
+		// Reporting no support here makes Config::getMipmapLevel() return 0
+		// on DSi regardless of the inherited default, the honest answer
+		// until mip levels are genuinely uploaded here.
+		case RenderFeature::Mipmaps: return false;
 		default: return false; // No fancy fog distance, occlusion queries, anisotropic filtering or MSAA.
 	}
 }
