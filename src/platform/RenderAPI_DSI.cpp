@@ -610,6 +610,11 @@ bool uploadTexture(int name, DsiTexture& tex, bool forceRebuildPalette)
 // this indexing assumption is wrong).
 std::vector<std::uint32_t> g_lightmapColors; // RGBA8, one std::uint32_t per texel
 int g_lightmapUnit = -1; // OpenGL's GL_TEXTURE1_ARB-style enum for the lightmap unit, once seen
+// sqrt(g_lightmapColors.size()), cached by renderSetLightmapColors() below --
+// see lightmapColorAt()'s own comment for why this must not be recomputed
+// there. 0 means "not a perfect square" (lightmapColorAt() no-ops on that),
+// matching the old inline check's behaviour.
+int g_lightmapSide = 0;
 
 // Looks up the baked lightmap colour at (u, v) without touching GL state.
 // Split out of applyLightmapColorAt() so a caller that ALSO has a per-vertex
@@ -619,19 +624,23 @@ int g_lightmapUnit = -1; // OpenGL's GL_TEXTURE1_ARB-style enum for the lightmap
 // the other. Returns false (leaving r8/g8/b8 untouched) exactly when there is
 // no lightmap data to look up, same condition applyLightmapColorAt used to
 // silently no-op on.
+//
+// Real-hardware performance concern raised this round, and correct: this now
+// runs once per vertex on every lit/tinted mesh drawn, every frame (it used
+// to no-op on the very first line, back when g_lightmapColors was never
+// populated on DSi at all -- see renderSetLightmapColors()'s own history).
+// The integer sqrt used to be recomputed HERE, per vertex -- up to 16
+// iterations of multiply-and-compare on an FPU-less ARM9, thousands of times
+// a frame for a chunk-heavy scene, for a value (g_lightmapColors' size,
+// always exactly 256) that never changes between one call and the next.
+// Hoisted into g_lightmapSide, computed once per frame in
+// renderSetLightmapColors() below instead of once per vertex here.
 bool lightmapColorAt(float u, float v, std::uint8_t& r8, std::uint8_t& g8, std::uint8_t& b8)
 {
-	if (g_lightmapColors.empty())
+	if (g_lightmapColors.empty() || g_lightmapSide <= 0)
 		return false;
 
-	const int side = static_cast<int>(g_lightmapColors.size());
-	// Only exact square counts are handled; anything else falls back to doing
-	// nothing rather than an out-of-bounds guess.
-	int sqrtSide = 0;
-	while ((sqrtSide + 1) * (sqrtSide + 1) <= side)
-		++sqrtSide;
-	if (sqrtSide * sqrtSide != side || sqrtSide <= 0)
-		return false;
+	const int sqrtSide = g_lightmapSide;
 
 	auto clampIndex = [](float value, int maxIndex) -> int
 	{
@@ -656,7 +665,13 @@ void applyLightmapColorAt(float u, float v)
 	std::uint8_t r8, g8, b8;
 	if (!lightmapColorAt(u, v, r8, g8, b8))
 		return;
-	glColor3f(r8 / 255.0f, g8 / 255.0f, b8 / 255.0f);
+	// glColor3b() takes the same 0-255 bytes lightmapColorAt() already
+	// produced -- glColor3f() would mean dividing each by 255.0f here only
+	// for libnds to multiply by 255 again internally to get back to the byte
+	// it started from, and float division has no hardware support on this
+	// ARM9 (arm946e-s+nofp): a software-float call per channel, per vertex,
+	// on what was already an exact integer.
+	glColor3b(r8, g8, b8);
 }
 
 // -----------------------------------------------------------------------------
@@ -884,7 +899,13 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 		}
 		else if (haveLightmapColor)
 		{
-			glColor3f(lightmapR / 255.0f, lightmapG / 255.0f, lightmapB / 255.0f);
+			// glColor3b(), not glColor3f(): lightmapR/G/B are already the
+			// exact 0-255 bytes this needs -- see applyLightmapColorAt()'s
+			// own comment for why converting to float and back is a real,
+			// avoidable software-float cost on this FPU-less ARM9, paid on
+			// every untinted (no mesh.hasColor) lit vertex, i.e. most block
+			// faces in the world every single frame.
+			glColor3b(lightmapR, lightmapG, lightmapB);
 		}
 		if (mesh.hasNormals)
 		{
@@ -1115,9 +1136,20 @@ void renderSetLightmapColors(const std::uint32_t* colors, int count)
 	if (!colors || count <= 0)
 	{
 		g_lightmapColors.clear();
+		g_lightmapSide = 0;
 		return;
 	}
 	g_lightmapColors.assign(colors, colors + count);
+
+	// Computed once here (once per frame -- see updateLightmap()'s call site)
+	// instead of once per vertex in lightmapColorAt(), which is what this
+	// value exists to avoid. count is always 256 in practice (EntityRenderer.cpp's
+	// updateLightmap() hardcodes a 256-entry table), so this loop runs at
+	// most 16 times a frame, not 16 times per vertex.
+	int side = 0;
+	while ((side + 1) * (side + 1) <= count)
+		++side;
+	g_lightmapSide = (side * side == count) ? side : 0;
 }
 
 void renderColor4f(float r, float g, float b, float a)
