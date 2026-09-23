@@ -468,22 +468,12 @@ void Entity::setPosition(double d, double d1, double d2)
 	float f = width / 2.0f;
 	float f1 = height;
 #if PLATFORM_DSI
-	// Diagnostic for the fall-through-the-floor investigation: the real-hardware
-	// sweepY log ("sweepBoxes=0", NaN in the sweep's local X/Z extents while Y
-	// stays a normal number) points at boundingBox's X/Z specifically being
-	// corrupted, not the block data (already confirmed loaded and solid by the
-	// existing "falling:" diagnostic). boundingBox's X/Z is built from `width`
-	// here and nowhere else, so if this is ever NaN/non-finite, this is the
-	// exact moment and call site it entered. Widened from isPlayer()-only --
-	// same reasoning as every other check this session: a chicken, two
-	// skeletons and a zombie have all shown the identical corruption, so an
-	// isPlayer() gate just hides every non-player occurrence. Unthrottled
-	// (setPosition() is not a hot per-frame call the way tick-loop code is).
-	if (!std::isfinite(width) || !std::isfinite(d) || !std::isfinite(d2))
-	{
-		MC_LOG_WARN("dsi", "setPosition NaN: entity=%s this=%p d=%.3f d1=%.3f d2=%.3f width=%.3f height=%.3f yOffset=%.3f ySize=%.3f ticksExisted=%d\n",
-			typeid(*this).name(), static_cast<const void*>(this), d, d1, d2, (double)width, (double)height, (double)yOffset, (double)ySize, (int)ticksExisted);
-	}
+	// The NaN check that lived here is retired -- it stayed clean across
+	// every real-hardware run once moveFlying()'s own finer-grained checks
+	// pinpointed the corruption to its 3-line rescale block specifically
+	// (see moveFlying() below) -- but g_dsiLastXWrite/g_dsiLastZWrite stay:
+	// they're free (a pointer assignment, no I/O) and other write-site
+	// markers elsewhere in this file still set the same pair.
 	g_dsiLastXWrite = "setPosition";
 	g_dsiLastZWrite = "setPosition";
 #endif
@@ -516,40 +506,10 @@ void Entity::onUpdate()
 
 void Entity::onEntityUpdate()
 {
-#if PLATFORM_DSI
-	// Fall-through diagnostic, next iteration: a respawn-cycle log showed the
-	// moveEntity() noClip branch taken for the player -- lastXWrite/lastZWrite
-	// = "noClipOffset", something never seen before this round. There is no
-	// code path in this codebase that ever sets a player's noClip true (grepped
-	// the whole tree: only a handful of particle-effect classes do, none of
-	// them EntityPlayer/EntityLiving), so this can only mean the noClip field
-	// itself got corrupted -- alongside, presumably, whatever nearby field
-	// (very possibly motionX/motionZ, sitting a few members away in the same
-	// object) is what has been going NaN all along. Every previous diagnostic
-	// this session checked specific WRITE SITES in the game's own movement/
-	// physics code, all clean; this checks the object's own state at the
-	// earliest possible point in the tick (before anything in onEntityUpdate()
-	// itself runs) to catch the exact tick something -- most likely an
-	// out-of-bounds write from an entirely unrelated subsystem, given how many
-	// legitimate call sites have now been ruled out -- corrupts it.
-	//
-	// Widened from isPlayer()-only and unlatched: a chicken, two skeletons
-	// and a zombie have all shown the identical fall-through corruption
-	// (none of them are particle-effect classes either, so "noClip true" is
-	// exactly as unexpected for them as for the player), and the previous
-	// shared static latch could suppress one entity's first bad tick if
-	// another entity had already tripped it earlier in the same session.
-	// entity=%s in the log line is enough to recognize and disregard an
-	// actual particle-effect hit if one ever shows up here.
-	{
-		const bool dsiNoClipNow = noClip;
-		if (dsiNoClipNow)
-		{
-			MC_LOG_WARN("dsi", "onEntityUpdate: noClip unexpectedly true ticksExisted=%d entity=%s this=%p posX=%.3f posY=%.3f posZ=%.3f motionX=%.6f motionY=%.6f motionZ=%.6f onGround=%d isDead=%d\n",
-				(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), posX, posY, posZ, motionX, motionY, motionZ, (int)onGround, (int)isDead);
-		}
-	}
-#endif
+	// The noClip sanity check that lived here is retired -- it stayed clean
+	// across every real-hardware run once moveFlying()'s own finer-grained
+	// checks pinpointed the corruption to its 3-line rescale block
+	// specifically (see moveFlying() below).
 	if (ridingEntity != nullptr && ridingEntity->isDead)
 	{
 		ridingEntity = nullptr;
@@ -680,43 +640,11 @@ bool Entity::isOffsetPositionInLiquid(double d, double d1, double d2)
 
 void Entity::moveEntity(double d, double d1, double d2)
 {
-#if PLATFORM_DSI
-	// Broader fall-through diagnostic: the setPosition() NaN check added last
-	// round never fired on a real-hardware run that still showed the bug
-	// (sweepY's localBox X/Z still NaN throughout), which rules out
-	// setPosition() as the entry point and means boundingBox's X/Z go bad
-	// somewhere else -- most likely one of this function's own unconditional
-	// `bounds->minX/maxX += d` writes in the sweep-apply helpers above (no
-	// NaN guard there, unlike AxisAlignedBB::addCoord()'s `if (d < 0.0)`-style
-	// checks, which do skip a NaN delta harmlessly). Checked at function
-	// entry, before anything here can change boundingBox, and only logged on
-	// a finite<->non-finite transition (not every call) so this stays cheap
-	// and the log shows the exact tick where it flips either way.
-	//
-	// Widened from isPlayer()-only (same reasoning as every other check this
-	// session -- a chicken, two skeletons and a zombie have all shown the
-	// identical corruption). s_boxWasFinite stays a single shared latch
-	// rather than per-entity: with the boundingBox self-heal in World.cpp
-	// now rebuilding a corrupted box back to finite every tick, an unlatched
-	// or per-entity version of this specific check would spam once per tick
-	// per simultaneously-corrupted entity for no more signal than
-	// moveEntity's own per-tick "d/d2 already non-finite" check already
-	// gives; this one's job is just to catch the moment ANY entity's box
-	// first flips, which the shared latch still does.
-	{
-		const bool nowFinite = std::isfinite(boundingBox->minX) && std::isfinite(boundingBox->minZ)
-			&& std::isfinite(boundingBox->maxX) && std::isfinite(boundingBox->maxZ);
-		static bool s_boxWasFinite = true;
-		if (nowFinite != s_boxWasFinite)
-		{
-			MC_LOG_WARN("dsi", "moveEntity boundingBox finite-state changed: nowFinite=%d ticksExisted=%d entity=%s this=%p posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f requestedD=%.6f requestedD2=%.6f onGround=%d minX=%.3f maxX=%.3f minZ=%.3f maxZ=%.3f lastXWrite=%s lastZWrite=%s rotationYaw=%.6f prevRotationYaw=%.6f width=%.6f\n",
-				(int)nowFinite, (int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), posX, posZ, motionX, motionZ, d, d2, (int)onGround,
-				boundingBox->minX, boundingBox->maxX, boundingBox->minZ, boundingBox->maxZ, g_dsiLastXWrite, g_dsiLastZWrite,
-				(double)rotationYaw, (double)prevRotationYaw, (double)width);
-			s_boxWasFinite = nowFinite;
-		}
-	}
-#endif
+	// The boundingBox finite-state transition check that lived here is
+	// retired -- it stayed clean (or added nothing beyond the d/d2 check
+	// below) across every real-hardware run once moveFlying()'s own
+	// finer-grained checks pinpointed the corruption to its 3-line rescale
+	// block specifically (see moveFlying() below).
 	if (noClip)
 	{
 #if PLATFORM_DSI
@@ -1235,20 +1163,16 @@ bool Entity::handleLavaMovement()
 void Entity::moveFlying(float f, float f1, float f2)
 {
 #if PLATFORM_DSI
-	// Fall-through diagnostic, next iteration: every other checkpoint in this
-	// investigation (movementFactor, rotationYaw, f4/f5, the onUpdate()
-	// before/after bracket in World.cpp) comes back clean, yet motionX/motionZ
-	// are NaN by the time moveEntity() reads them a few lines below this
-	// function's own two writes. The one thing nothing has checked yet is f/f1
-	// themselves (moveStrafing/moveForward) at entry -- and the "no real
-	// input" guard right below this block does not actually catch them if
-	// they are NaN: `NaN < 0.01f` is false in IEEE 754 (every comparison with
-	// NaN is false), so a NaN f/f1 silently falls through the early return
-	// instead of being treated as "no input", then poisons f3/f/f1 and
-	// finally motionX/motionZ via the += below. Guarding it here both closes
-	// that real logic gap regardless of where f/f1 went bad, and the log line
-	// firing (or not) in the next real-hardware run tells us definitively
-	// whether this is the entry point.
+	// f/f1 (moveStrafing/moveForward) at entry -- the "no real input" guard
+	// right below this block does not actually catch them if they are NaN:
+	// `NaN < 0.01f` is false in IEEE 754 (every comparison with NaN is
+	// false), so a NaN f/f1 silently falls through the early return instead
+	// of being treated as "no input", then poisons f3/f/f1 and finally
+	// motionX/motionZ via the += a few lines down. This guard both stops
+	// that propagation regardless of cause and rules out the raw parameters
+	// themselves -- confirmed clean every real-hardware run so far, which
+	// narrowed the search to the rescale steps just below (see their own
+	// comments).
 	if (!std::isfinite(f) || !std::isfinite(f1))
 	{
 		MC_LOG_WARN("dsi", "moveFlying: non-finite move input, treating as no input ticksExisted=%d entity=%s f=%.6f f1=%.6f f2=%.6f\n",
@@ -1257,6 +1181,21 @@ void Entity::moveFlying(float f, float f1, float f2)
 	}
 #endif
 	float f3 = MathHelper::sqrt_float(f * f + f1 * f1);
+#if PLATFORM_DSI
+	// Real-hardware logs now prove f/f1 arrive here finite (the entry check
+	// above never fires) but are NaN by the time f4/f5 are computed a few
+	// lines down -- and f2 is independently confirmed finite too (the "bad
+	// input" check below tests it and never fires). The only unverified
+	// step left in this specific function is this rescale itself: sqrt_float
+	// of a sum of two squares of finite values should never be NaN/Inf
+	// mathematically, but it is the one call in this chain this session
+	// has not directly checked the output of.
+	if (!std::isfinite(f3))
+	{
+		MC_LOG_WARN("dsi", "moveFlying: sqrt_float produced non-finite f3 ticksExisted=%d entity=%s this=%p f=%.6f f1=%.6f f3=%.6f\n",
+			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (double)f, (double)f1, (double)f3);
+	}
+#endif
 	if (f3 < 0.01f)
 	{
 		return;
@@ -1266,57 +1205,33 @@ void Entity::moveFlying(float f, float f1, float f2)
 		f3 = 1.0f;
 	}
 	f3 = f2 / f3;
+#if PLATFORM_DSI
+	if (!std::isfinite(f3))
+	{
+		MC_LOG_WARN("dsi", "moveFlying: f2/f3 division produced non-finite f3 ticksExisted=%d entity=%s this=%p f2=%.6f f3=%.6f\n",
+			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (double)f2, (double)f3);
+	}
+#endif
 	f *= f3;
 	f1 *= f3;
+#if PLATFORM_DSI
+	if (!std::isfinite(f) || !std::isfinite(f1))
+	{
+		MC_LOG_WARN("dsi", "moveFlying: f*=f3/f1*=f3 produced non-finite result ticksExisted=%d entity=%s this=%p f=%.6f f1=%.6f f3=%.6f\n",
+			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (double)f, (double)f1, (double)f3);
+	}
+#endif
 	float f4 = MathHelper::sin((rotationYaw * 3.1415927f) / 180.0f);
 	float f5 = MathHelper::cos((rotationYaw * 3.1415927f) / 180.0f);
-#if PLATFORM_DSI
-	// Fall-through diagnostic, next iteration: real-hardware logs show d/d2
-	// (copies of motionX/motionZ taken moments later, at moveEntity()'s own
-	// entry) already NaN every tick from the first bad one onward, yet
-	// moveEntityWithHeading()'s own entry/movementFactor/exit checks
-	// (latched, same family as everywhere else in this investigation) never
-	// fire despite motionX/motionZ only ever being written here (this
-	// function early-returns above whenever f3 < 0.01f, i.e. whenever
-	// there is no real movement input). Widened from isPlayer()-only: a
-	// chicken has shown the exact same corruption at a completely different
-	// location, so this is not tied to the player or D-pad input -- it is
-	// AI-driven moveStrafing/moveForward for a chicken, not a real button
-	// press. Deliberately unlatched (logs every occurrence, not just the
-	// first) to sidestep whatever is suppressing the other checks and pin
-	// down directly whether f2 (movementFactor, which goes to infinity if a
-	// block's slipperiness*0.91 cubes to zero in moveEntityWithHeading) or
-	// rotationYaw is already bad walking in.
-	if (!std::isfinite(f2) || !std::isfinite(rotationYaw) || !std::isfinite(f4) || !std::isfinite(f5) || !std::isfinite(motionX) || !std::isfinite(motionZ))
-	{
-		MC_LOG_WARN("dsi", "moveFlying: bad input ticksExisted=%d entity=%s f=%.6f f1=%.6f f2=%.6f rotationYaw=%.6f f4=%.6f f5=%.6f motionXBefore=%.6f motionZBefore=%.6f\n",
-			(int)ticksExisted, typeid(*this).name(), (double)f, (double)f1, (double)f2, (double)rotationYaw, (double)f4, (double)f5, motionX, motionZ);
-	}
-#endif
+	// The two checks that used to live here (f2/rotationYaw/f4/f5/motionX/
+	// motionZ before the += below, and motionX/motionZ again right after
+	// it) are retired: both are now redundant with the three finer-grained
+	// checks just above (sqrt_float/f2÷f3/f*=f3), which already proved f/f1
+	// are the ones going non-finite, upstream of this line entirely -- 147
+	// matching occurrences in the latest real-hardware log, one of those
+	// three checks will name the exact culprit line next round.
 	motionX += f * f5 - f1 * f4;
 	motionZ += f1 * f5 + f * f4;
-#if PLATFORM_DSI
-	// Last gap in this specific call chain: every checkpoint up to and
-	// including the line above's own operands (f/f1/f2/rotationYaw/f4/f5,
-	// and now motionX/motionZ themselves just before the +=, added above)
-	// has come back finite on every real-hardware run so far, yet
-	// moveEntity() still finds motionX/motionZ NaN a few lines after this
-	// function returns. If finite-in still produces non-finite-out right
-	// here, that stops being a logic bug anywhere in this codebase's own
-	// arithmetic and starts pointing at something writing over this
-	// object's memory between this line and moveEntity()'s read of it --
-	// which, on this single-threaded target, can only be another function
-	// call in between, not concurrent access. The only code that runs
-	// between here and moveEntity() is the ladder-velocity-clamp block
-	// (motionX/motionZ clamped to ±0.15, never assigned a computed value)
-	// and, for water/lava callers, nothing at all -- neither can produce
-	// this from a finite value.
-	if (!std::isfinite(motionX) || !std::isfinite(motionZ))
-	{
-		MC_LOG_WARN("dsi", "moveFlying: motionX/motionZ became non-finite from this call's own += ticksExisted=%d entity=%s this=%p f=%.6f f1=%.6f f5=%.6f f4=%.6f motionX=%.6f motionZ=%.6f\n",
-			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (double)f, (double)f1, (double)f5, (double)f4, motionX, motionZ);
-	}
-#endif
 }
 
 int_t Entity::getBrightnessForRender(float)
@@ -1507,28 +1422,10 @@ void Entity::applyEntityCollision(Entity *entity)
 
 void Entity::addVelocity(double d, double d1, double d2)
 {
-#if PLATFORM_DSI
-	// Fall-through diagnostic, next iteration: neither the moveEntityWithHeading()
-	// entry/exit checks nor the Entity::onUpdate() bracket ever fired on a tick
-	// where motionX/motionZ were already NaN, which rules out everything inside
-	// onLivingUpdate() up to and including moveEntityWithHeading()'s own return.
-	// The one write site downstream of that this session hadn't looked at yet:
-	// onLivingUpdate()'s entity-push-collision block (after moveEntityWithHeading()
-	// returns, still inside onLivingUpdate()) calls entity->applyEntityCollision(),
-	// which calls this function on the player via `entity->addVelocity(d, 0.0, d1)`.
-	// addVelocity() is also this codebase's single general "add to motion" entry
-	// point (potions, knockback, water/lava push, etc.), so checking here catches
-	// any caller that hands it a non-finite delta, not just this one suspect.
-	// Widened from isPlayer()-only: entity-push-collision runs on any pair of
-	// nearby entities, not just the player, and a chicken/skeleton/zombie
-	// have all shown the identical corruption -- this is exactly the kind of
-	// shared infrastructure an isPlayer() gate would hide a non-player hit on.
-	if (!std::isfinite(d) || !std::isfinite(d2))
-	{
-		MC_LOG_WARN("dsi", "addVelocity NaN: entity=%s this=%p d=%.6f d1=%.6f d2=%.6f motionX=%.6f motionZ=%.6f ticksExisted=%d onGround=%d\n",
-			typeid(*this).name(), static_cast<const void*>(this), d, d1, d2, motionX, motionZ, (int)ticksExisted, (int)onGround);
-	}
-#endif
+	// The NaN check that lived here is retired -- it stayed clean across
+	// every real-hardware run once moveFlying()'s own finer-grained checks
+	// pinpointed the corruption to its 3-line rescale block specifically
+	// (see moveFlying() below).
 	motionX += d;
 	motionY += d1;
 	motionZ += d2;

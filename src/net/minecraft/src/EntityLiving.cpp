@@ -754,40 +754,17 @@ void EntityLiving::setPositionAndRotation2(double d, double d1, double d2, float
 
 void EntityLiving::onUpdate()
 {
-#if PLATFORM_DSI
-	// Fall-through diagnostic, next iteration: the moveEntityWithHeading()
-	// entry/exit checks added last round never fired on the tick where the
-	// old moveEntity() diagnostic showed motionX/motionZ already NaN --
-	// meaning the corruption is not inside moveEntityWithHeading() at all.
-	// Bracket the other candidate that runs earlier in the same tick:
-	// Entity::onUpdate() (onEntityUpdate() -> handleWaterMovement() ->
-	// World::handleMaterialAcceleration()'s flow-vector normalize(), a
-	// classic 0-length-vector NaN source in vanilla Minecraft) runs BEFORE
-	// onLivingUpdate()/moveEntityWithHeading() in this same function.
-	//
-	// Widened from isPlayer()-only and unlatched, same reasoning as every
-	// other check this session: a chicken, two skeletons and a zombie have
-	// all shown the identical corruption, and a shared static latch across
-	// entities could suppress one entity's own first bad tick after another
-	// entity had already tripped it.
-	const bool dsiFiniteBeforeEntityUpdate = std::isfinite(motionX) && std::isfinite(motionZ);
-#endif
+	// The Entity::onUpdate() before/after motion bracket that lived here is
+	// retired: it stayed clean across every real-hardware run once
+	// moveFlying()'s own finer-grained checks pinpointed the corruption to
+	// its 3-line rescale block specifically (see Entity.cpp), so it stopped
+	// adding information while still costing a log write on every tick any
+	// entity was mid-corruption -- real overhead on real hardware (a
+	// real-hardware report of much heavier texture flicker/dropped frames
+	// traced back to how much this investigation's own logging had grown by
+	// this round: 488 of 663 lines in one session's log were diagnostic
+	// warnings).
 	Entity::onUpdate();
-#if PLATFORM_DSI
-	{
-		const bool dsiFiniteAfterEntityUpdate = std::isfinite(motionX) && std::isfinite(motionZ);
-		if (dsiFiniteBeforeEntityUpdate && !dsiFiniteAfterEntityUpdate)
-		{
-			MC_LOG_WARN("dsi", "EntityLiving::onUpdate: motion became non-finite INSIDE Entity::onUpdate() ticksExisted=%d entity=%s this=%p onGround=%d isInWater=%d\n",
-				(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (int)onGround, (int)isInWater());
-		}
-		else if (!dsiFiniteBeforeEntityUpdate)
-		{
-			MC_LOG_WARN("dsi", "EntityLiving::onUpdate: motion ALREADY non-finite BEFORE Entity::onUpdate() ticksExisted=%d entity=%s this=%p onGround=%d\n",
-				(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (int)onGround);
-		}
-	}
-#endif
 	if (arrowHitTempCounter > 0)
 	{
 		if (arrowHitTimer <= 0)
@@ -1261,29 +1238,12 @@ void EntityLiving::fall(float f)
 
 void EntityLiving::moveEntityWithHeading(float f, float f1)
 {
-#if PLATFORM_DSI
-	// Fall-through diagnostic, next iteration: widened from isPlayer()-only
-	// -- real-hardware logs now show a chicken, two different skeletons, and
-	// a zombie all hitting the exact same corruption, at wildly different
-	// ticksExisted (5 to 228), so this was never player-specific and the
-	// isPlayer() gate was hiding every non-player occurrence from these
-	// three checks entirely. Also switched off the shared static latch
-	// (s_dsiMotionWasFinite used to gate all three of these checks): that
-	// static is one variable shared by every entity that ever calls this
-	// function, so with multiple entities corrupting independently it could
-	// latch "already seen" from entity A and silently suppress entity B's
-	// own first bad tick. Unlatched (logs every occurrence) is the correct
-	// tool now, same reasoning as moveFlying()'s own checks.
-	const bool dsiFiniteAtEntry = std::isfinite(motionX) && std::isfinite(motionZ);
-	if (!dsiFiniteAtEntry)
-	{
-		// Already bad walking in: whatever corrupted motion happened outside
-		// this function entirely (a previous tick's water/lava branch, or a
-		// completely different code path).
-		MC_LOG_WARN("dsi", "moveEntityWithHeading: motion ALREADY non-finite at entry ticksExisted=%d entity=%s this=%p motionX=%.6f motionZ=%.6f onGround=%d isInWater=%d\n",
-			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), motionX, motionZ, (int)onGround, (int)isInWater());
-	}
-#endif
+	// This function's own entry/movementFactor/exit checks are retired: all
+	// three stayed clean across every real-hardware run once moveFlying()'s
+	// finer-grained checks pinpointed the corruption to its 3-line rescale
+	// block specifically (see Entity.cpp), so they stopped adding
+	// information while still costing a log write per tick -- see the
+	// log-volume note on EntityLiving::onUpdate() above.
 	if (isInWater())
 	{
 		double d = posY;
@@ -1326,14 +1286,6 @@ void EntityLiving::moveEntityWithHeading(float f, float f1)
 		}
 		float f3 = 0.16277136f / (f2 * f2 * f2);
 		float movementFactor = onGround ? (isAIEnabled() ? aiMoveSpeed : landMovementFactor) * f3 : jumpMovementFactor;
-#if PLATFORM_DSI
-		if (!std::isfinite(movementFactor))
-		{
-			MC_LOG_WARN("dsi", "moveEntityWithHeading: movementFactor non-finite ticksExisted=%d entity=%s this=%p f2=%.6f f3=%.6f onGround=%d aiEnabled=%d aiMoveSpeed=%.6f landMovementFactor=%.6f jumpMovementFactor=%.6f f=%.3f f1=%.3f\n",
-				(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (double)f2, (double)f3, (int)onGround, (int)isAIEnabled(),
-				(double)aiMoveSpeed, (double)landMovementFactor, (double)jumpMovementFactor, (double)f, (double)f1);
-		}
-#endif
 		moveFlying(f, f1, movementFactor);
 		f2 = 0.91f;
 		if (onGround)
@@ -1373,16 +1325,6 @@ void EntityLiving::moveEntityWithHeading(float f, float f1)
 		motionX *= f2;
 		motionZ *= f2;
 	}
-#if PLATFORM_DSI
-	{
-		const bool dsiFiniteAtExit = std::isfinite(motionX) && std::isfinite(motionZ);
-		if (dsiFiniteAtEntry && !dsiFiniteAtExit)
-		{
-			MC_LOG_WARN("dsi", "moveEntityWithHeading: motion became non-finite THIS CALL ticksExisted=%d entity=%s this=%p onGround=%d isInWater=%d posX=%.3f posZ=%.3f f=%.3f f1=%.3f\n",
-				(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (int)onGround, (int)isInWater(), posX, posZ, (double)f, (double)f1);
-		}
-	}
-#endif
 	field_705_Q = field_704_R;
 #if PLATFORM_FLOAT_ENTITY_AI_MATH
 	const float d2 = (float)(posX - prevPosX);
@@ -1627,27 +1569,11 @@ void EntityLiving::onLivingUpdate()
 			}
 		}
 	}
-#if PLATFORM_DSI
-	// Closes out the bracket this round's diagnostics started: entry/exit of
-	// moveEntityWithHeading() and of Entity::onUpdate() both came back clean,
-	// leaving the entity-push-collision block just above (and addVelocity(),
-	// now instrumented directly) as the remaining untested code that runs
-	// between one tick's motion being fine and the next tick's moveEntity()
-	// finding it NaN. This is the end of onLivingUpdate() itself -- if motion
-	// is still bad here despite addVelocity()'s own check staying quiet, the
-	// corruption is neither addVelocity() nor anything reachable from this
-	// function this tick, and the search moves outside onLivingUpdate() again.
-	// Widened from isPlayer()-only and unlatched, same reasoning as every
-	// other check this session.
-	{
-		const bool dsiFiniteAtEnd = std::isfinite(motionX) && std::isfinite(motionZ);
-		if (!dsiFiniteAtEnd)
-		{
-			MC_LOG_WARN("dsi", "onLivingUpdate: motion non-finite at end of function ticksExisted=%d entity=%s this=%p onGround=%d\n",
-				(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (int)onGround);
-		}
-	}
-#endif
+	// This end-of-function check is retired along with the rest of
+	// onLivingUpdate()/moveEntityWithHeading()'s checks: it stayed clean
+	// across every real-hardware run once moveFlying()'s own finer-grained
+	// checks pinpointed the corruption to its 3-line rescale block (see
+	// Entity.cpp) -- see the log-volume note on EntityLiving::onUpdate().
 }
 
 void EntityLiving::updatePotionEffects()

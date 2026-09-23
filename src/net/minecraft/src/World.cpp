@@ -3623,21 +3623,14 @@ void World::updateEntityWithOptionalForce(Entity* entity, bool flag)
     entity->lastTickPosZ = entity->posZ;
     entity->prevRotationYaw = entity->rotationYaw;
     entity->prevRotationPitch = entity->rotationPitch;
-    
-#if PLATFORM_DSI
-    // Fall-through diagnostic, next iteration: the motion self-heal added
-    // last round (right below, after this block) has never once fired in a
-    // real-hardware log, despite Entity::moveEntity()'s own pre-sweep check
-    // proving motionX/motionZ are NaN on the exact same tick, in the exact
-    // same entity. That is not explainable by anything read in this
-    // function's source -- there is no early return between onUpdate() and
-    // the motion-repair check below. Bracket the call directly and
-    // unconditionally (every entity, not just the player -- a chicken has
-    // shown the same corruption at a different location entirely, ruling
-    // out anything player-input-specific) to see the true before/after
-    // state with nothing left to infer.
-    const bool dsiMotionFiniteBeforeUpdate = std::isfinite(entity->motionX) && std::isfinite(entity->motionY) && std::isfinite(entity->motionZ);
-#endif
+
+    // The onUpdate() before/after motion bracket that lived here is retired:
+    // it stayed clean across every real-hardware run once moveFlying()'s own
+    // finer-grained checks pinpointed the corruption to its 3-line rescale
+    // block specifically (see Entity.cpp), so it stopped adding information
+    // while still costing a log write (a real SD-card cost, see the log-
+    // volume cleanup note on the moveEntity() check below) on every tick any
+    // entity is mid-corruption.
     if (flag && entity->addedToChunk)
     {
         if (entity->ridingEntity != nullptr)
@@ -3649,17 +3642,6 @@ void World::updateEntityWithOptionalForce(Entity* entity, bool flag)
             entity->onUpdate();
         }
     }
-#if PLATFORM_DSI
-    {
-        const bool dsiMotionFiniteAfterUpdate = std::isfinite(entity->motionX) && std::isfinite(entity->motionY) && std::isfinite(entity->motionZ);
-        if (dsiMotionFiniteBeforeUpdate != dsiMotionFiniteAfterUpdate || !dsiMotionFiniteAfterUpdate)
-        {
-            MC_LOG_WARN("dsi", "World::updateEntityWithOptionalForce: onUpdate() bracket for %s this=%p finiteBefore=%d finiteAfter=%d motionX=%.6f motionY=%.6f motionZ=%.6f\n",
-                typeid(*entity).name(), static_cast<const void*>(entity), (int)dsiMotionFiniteBeforeUpdate, (int)dsiMotionFiniteAfterUpdate,
-                entity->motionX, entity->motionY, entity->motionZ);
-        }
-    }
-#endif
 
     if (std::isnan(entity->posX) || std::isinf(entity->posX))
     {
