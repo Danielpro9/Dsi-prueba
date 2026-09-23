@@ -1931,8 +1931,18 @@ void Minecraft::runTick()
             static unsigned int s_memTrendTick = 0;
             if (++s_memTrendTick % 60 == 0)
             {
-                MC_LOG_INFO("dsi", "memtrend heap=%u/%uKB chunks=%d entities=%u tileEntities=%u\n",
+                // vram= added alongside heap: newly-encountered mob skins and
+                // item icons (cow.png, pig.png, item/cart.png, ...) load
+                // lazily and are never released once seen, so the 512KB
+                // texture budget -- separate from the general heap above --
+                // also only ever grows through a session. Real-hardware
+                // reports of a brief white flash on the hotbar/hand/mobs
+                // getting worse the longer a session ran are consistent with
+                // that budget getting tighter over time, not just with
+                // exploring more chunks.
+                MC_LOG_INFO("dsi", "memtrend heap=%u/%uKB vram=%u/512KB chunks=%d entities=%u tileEntities=%u\n",
                     (unsigned)(dsiGetHeapCommitted() / 1024u), (unsigned)(dsiGetHeapCeiling() / 1024u),
+                    (unsigned)(dsiTotalTextureVramBytes() / 1024u),
                     (int)theWorld->getLoadedChunkCount(),
                     (unsigned)theWorld->loadedEntityList.size(),
                     (unsigned)theWorld->loadedTileEntityList.size());

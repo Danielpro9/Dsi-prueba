@@ -103,7 +103,34 @@ void processMessages()
 
 void swapBuffers()
 {
-	glFlush(0); // waits for vblank and swaps
+	// Real-hardware evidence this addresses: a screenshot showed the top
+	// screen split cleanly in two -- one half correctly textured (tree bark,
+	// the wood-plank hotbar icon's grain all visible), the other half flat,
+	// untextured colour -- getting worse the longer a session ran, tracking
+	// the same window where committed heap/texture VRAM pressure keeps
+	// climbing (see Minecraft.cpp's memtrend diagnostic). glFlush(0) is
+	// documented as "waits for vblank and swaps", which the comment this one
+	// replaces (and DsiBringup.cpp's matching one) took at face value -- but
+	// libnds's actual implementation is `GFX_FLUSH = mode;`, a plain register
+	// write with a memory barrier, not a blocking wait. It tells the GPU
+	// where this frame's polygon list ends and to swap at the NEXT vblank;
+	// it does not stop the CPU from immediately going on to build and submit
+	// the FOLLOWING frame's polygon list. With frame times measured at
+	// 100-400ms+ under load (dsi.perf's own render= figures), vastly longer
+	// than one ~16.7ms vblank period, nothing in this loop stopped the CPU
+	// from getting several logical frames ahead of whatever the GPU had
+	// actually finished rasterizing and displayed -- a real hardware/software
+	// race between CPU-side texture VRAM reuse (evicting a texture that
+	// in-flight, already-submitted-but-not-yet-rasterized polygons from an
+	// earlier frame may still be sampling) and the GPU's own progress,
+	// exactly the kind of bug that would show as "part of this frame drew
+	// correctly, part did not" and get worse as VRAM turnover increases with
+	// playtime. swiWaitForVBlank() is libnds's actual blocking wait (used
+	// correctly elsewhere, e.g. DsiBringup.cpp's own colour-cycle demo loop)
+	// -- added here to genuinely pace the CPU to one submitted frame per
+	// display refresh instead of assuming glFlush() already did that.
+	glFlush(0);
+	swiWaitForVBlank();
 	heartbeat();
 }
 
