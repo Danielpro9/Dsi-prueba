@@ -3,6 +3,7 @@
 #include "platform/RenderAPI.h"
 #include "platform/Log.h"
 #include "dsi/minecraft/DsiCapturedMeshRepack.h"
+#include "dsi/DsiEarlyInit.h"
 
 #include <nds.h>
 #include <algorithm>
@@ -573,6 +574,22 @@ bool uploadTexture(int name, DsiTexture& tex, bool forceRebuildPalette)
 	// forceHighPrecision existed -- worse than a guaranteed-fit RGBA
 	// upload, but a real, recognisable, correctly-transparent icon beats a
 	// checkerboard placeholder for the whole atlas.
+	//
+	// Diagnostic added on request: a real-hardware log (predating this repo's
+	// vram= tracking, see Minecraft.cpp's memtrend line) showed a 256x256
+	// texture -- almost certainly terrain.png, the only forceHighPrecision
+	// atlas that size touched this early in a session -- landing on this
+	// exact fallback and needing shift=3 (61 colours total) to fit its
+	// palette, right at the start of gameplay. 61 colours spread across the
+	// whole block atlas would show as flat, undetailed textures -- possibly
+	// THE "blocks have their colour but no texture detail" report this is
+	// chasing, not yet confirmed because that log predates dsiTotalTextureVramBytes()
+	// being wired into the memtrend line. This makes the next log say so
+	// directly: how full the 512KB texture-image budget was at the exact
+	// moment terrain.png's real-quality RGBA upload lost the room it needed.
+	MC_LOG_WARN("dsi", "high-precision upload failed for %dx%d, falling back to paletted; vram=%u/512KB\n",
+		tex.width, tex.height, (unsigned)(dsiTotalTextureVramBytes() / 1024u));
+
 	if (tryUploadPaletted(name, tex, param, forceRebuildPalette))
 	{
 		glTexParameter(0, param);
