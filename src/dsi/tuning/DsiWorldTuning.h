@@ -140,18 +140,16 @@
 
 // Toggle for day/night/torch lighting (EntityRenderer.cpp's updateLightmap()
 // -> renderSetLightmapColors(), consumed per-vertex by RenderAPI_DSI.cpp's
-// drawInterleavedMesh()). Real-hardware testing before the
-// emitColorIfChanged() redundant-colour dedup showed frame rate collapsing
-// to an unstable ~2-6 FPS while exploring (down from ~7-8 FPS with lighting
-// off), bad enough that the touchscreen camera stopped feeling responsive.
-// Back on here to test whether that dedup optimization alone brings frame
-// rate back to an acceptable range on real hardware -- flip to 0 (as a
-// previous round of this file did) if it does not, without needing to
-// re-derive the EntityRenderer.cpp/RenderAPI_DSI.cpp wiring itself, which
-// stays in place either way. See EntityRenderer.cpp's
+// drawInterleavedMesh()). Real-hardware A/B test, both with
+// emitColorIfChanged()'s redundant-colour dedup in place: lighting on was
+// still noticeably slower than lighting off, not just "a bit off" -- off
+// stays the default until a further optimization pass (greedy meshing,
+// fewer draw calls, ...) closes more of that gap. Flip to 1 to re-test; the
+// EntityRenderer.cpp/RenderAPI_DSI.cpp wiring itself is unaffected either
+// way. See EntityRenderer.cpp's
 // `defined(PS2_PLATFORM) || (defined(DSI_PLATFORM) && PLATFORM_DSI_LIGHTMAP_ENABLED)`
 // guard, the only place this is read.
 #undef  PLATFORM_DSI_LIGHTMAP_ENABLED
-#define PLATFORM_DSI_LIGHTMAP_ENABLED              1
+#define PLATFORM_DSI_LIGHTMAP_ENABLED              0
 
 #endif // PLATFORM_DSI
