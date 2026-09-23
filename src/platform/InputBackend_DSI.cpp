@@ -171,12 +171,13 @@ void dsiPushGameplayKeyEvents()
 	// when one is, so this needs no DSi-specific menu handling at all.
 	if (changed & KEY_START)
 		lwjgl::Keyboard::detail::pushKey(lwjgl::Keyboard::KEY_ESCAPE, (held & KEY_START) != 0);
-	// Chat only opens in a multiplayer world (Minecraft.cpp gates GuiChat on
-	// isMultiplayerWorld()), which this NO_NETWORK build can never have --
-	// wired for parity with the requested scheme and in case networking is
-	// ever added, not because it does anything today.
+	// Y: temporarily mapped to F3 (toggles Minecraft.cpp's showDebugInfo
+	// overlay) on request -- chat (its original binding, keyBindChat's
+	// default KEY_T) only opens in a multiplayer world, which this
+	// NO_NETWORK build can never have, so Y was doing nothing. Revisit if
+	// chat ever becomes reachable and Y needs to go back to it.
 	if (changed & KEY_Y)
-		lwjgl::Keyboard::detail::pushKey(lwjgl::Keyboard::KEY_T, (held & KEY_Y) != 0);
+		lwjgl::Keyboard::detail::pushKey(lwjgl::Keyboard::KEY_F3, (held & KEY_Y) != 0);
 
 	// B + Left/Right: step the hotbar selection, the same mouse-wheel path
 	// a real scroll wheel drives (Minecraft.cpp's
@@ -216,7 +217,18 @@ PlatformGamepadSnapshot platformGamepadSnapshot(int)
 	// MovementInputFromOptions.cpp computes moveForward += -leftY and
 	// moveStrafe += -leftX, so up/left need to be the negative direction for
 	// forward/strafe-left to come out positive the way that file expects.
-	out.leftX = (held & KEY_LEFT) ? -1.0f : (held & KEY_RIGHT) ? 1.0f : 0.0f;
+	//
+	// Real-hardware report: holding B to step the hotbar (dsiPushGameplayKeyEvents()'s
+	// own B+Left/Right chord above) also strafed the player, because this
+	// function read Left/Right unconditionally into leftX with no knowledge
+	// of what B was doing with the same two buttons. While B is held, Left/
+	// Right belong to the hotbar chord instead -- suppress them here so the
+	// player holds still during hotbar selection, matching the "the two
+	// never conflict" assumption the B+Left/Right comment above already
+	// states (menu navigation's mouseWheel path has no such conflict either,
+	// since it is never live at the same time as gameplay movement).
+	const bool hotbarChordActive = (held & KEY_B) != 0;
+	out.leftX = hotbarChordActive ? 0.0f : (held & KEY_LEFT) ? -1.0f : (held & KEY_RIGHT) ? 1.0f : 0.0f;
 	out.leftY = (held & KEY_UP)   ? -1.0f : (held & KEY_DOWN)  ? 1.0f : 0.0f;
 
 	// Touch-drag delta, normalized to the same [-1, 1] "stick deflection"

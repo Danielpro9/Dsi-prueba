@@ -18,6 +18,9 @@
 #include "Material.h"
 #include "OptiFineResource.h"
 #include "RenderEngine.h"
+#if PLATFORM_DSI
+#include "platform/Log.h"
+#endif
 
 std::vector<int_t> CustomColorizer::grassColors;
 std::vector<int_t> CustomColorizer::waterColors;
@@ -69,6 +72,21 @@ void CustomColorizer::update(RenderEngine *engine)
 	grassColors = loadColors(engine, "/misc/grasscolor.png", 65536);
 	foliageColors = loadColors(engine, "/misc/foliagecolor.png", 65536);
 	waterColors = loadColors(engine, "/misc/watercolor.png", 65536);
+#if PLATFORM_DSI
+	// One-shot (this runs once per texture-pack load, not per frame/tick, so
+	// the usual "no per-tick logging" concern does not apply): real-hardware
+	// reports after the "/misc/watercolorX.png" typo fix still say water
+	// looks white. This says definitively whether waterColors actually
+	// loaded this time and what colour index (127,127) -- a middling
+	// temperate-biome sample -- actually holds, instead of guessing whether
+	// the fix took or whether a correctly-tinted-but-pale colour just reads
+	// as "white" on a small, bright, sunlit screen.
+	{
+		const int_t sample = waterColors.size() == 65536 ? (waterColors[(127u << 8) | 127u] & 0xffffff) : -1;
+		MC_LOG_INFO("dsi", "CustomColorizer::update: watercolor.png loaded=%s size=%u sample(127,127)=#%06x\n",
+			waterColors.empty() ? "NO" : "yes", (unsigned)waterColors.size(), (unsigned)(sample < 0 ? 0 : sample));
+	}
+#endif
 	if (!Config::isCustomColors()) return;
 
 	foliagePineColors = loadColors(engine, "/misc/pinecolor.png", 65536);

@@ -550,9 +550,37 @@ bool uploadTexture(int name, DsiTexture& tex, bool forceRebuildPalette)
 
 	glBindTexture(0, name);
 	const int uploaded = glTexImage2D(0, 0, GL_RGBA, tex.width, tex.height, 0, param, converted.data());
-	glTexParameter(0, param); // wrap bits already set above; kept for parity with callers that only touch params later
+	if (uploaded)
+	{
+		glTexParameter(0, param); // wrap bits already set above; kept for parity with callers that only touch params later
+		tex.paletted = false;
+		return true;
+	}
+
+	// Real-hardware regression this fixes: forceHighPrecision (terrain.png/
+	// gui/items.png, see the DsiTexture field comment) used to mean "GL_RGBA
+	// or nothing" -- fine for terrain.png, which fits, but gui/items.png
+	// loads AFTER terrain.png/gui.png/font/mob skins are already resident,
+	// and its own 128KB GL_RGBA request routinely lost that race by a few
+	// KB ("~392KB/512KB already resident" in one real log). With no
+	// fallback, that took down EVERY item icon at once -- the whole atlas
+	// fell back to RenderEngine.cpp's checkerboard placeholder, which is
+	// what real hardware reported as "leather and raw beef are solid white"
+	// and "no item has transparency" (the checkerboard has neither the
+	// right colours nor real alpha). Retrying at the paletted path here
+	// costs the same quantization quality items.png already had before
+	// forceHighPrecision existed -- worse than a guaranteed-fit RGBA
+	// upload, but a real, recognisable, correctly-transparent icon beats a
+	// checkerboard placeholder for the whole atlas.
+	if (tryUploadPaletted(name, tex, param, forceRebuildPalette))
+	{
+		glTexParameter(0, param);
+		tex.paletted = true;
+		return true;
+	}
+
 	tex.paletted = false;
-	return uploaded != 0;
+	return false;
 }
 
 // -----------------------------------------------------------------------------
