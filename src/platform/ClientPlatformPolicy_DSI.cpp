@@ -96,6 +96,24 @@ void releaseWorldEntryAssets(RenderEngine* renderEngine)
 	// starts" asset as panorama/title, just missed the first time.
 	renderEngine->releaseTexture("/legacy/logo1.png");
 	renderEngine->releaseTexture("/legacy/logo2.png");
+	// Real-hardware evidence (debug.log's resident-texture dump, taken mid-
+	// gameplay after a /gui/inventory.png upload failure): these three menu-
+	// only legacy UI widgets (the options-list scrollbar arrow and the
+	// legacy-style checkbox on/off graphics) were STILL resident well after
+	// entering the world, alongside panorama/title/logo1/logo2 which this
+	// function already correctly drops. Small individually (~5KB combined),
+	// but the 512KB budget is tight enough post-terrain.png-high-precision
+	// that every KB matters for whether gui.png/mob skins/the hand texture
+	// stay resident without an eviction-and-retry cycle -- the most likely
+	// explanation for the reported brief white flash on the hotbar, hand and
+	// mob models real hardware now shows with lighting off (so not caused by
+	// the lightmap work). Same lazy-reload-if-a-menu-needs-them-again pattern
+	// as the four releases above; legacy/tick.png is the on-state graphic
+	// (tickbox.png/tickbox_hovered.png are the off-state boxes).
+	renderEngine->releaseTexture("/legacy/scroll_down.png");
+	renderEngine->releaseTexture("/legacy/tick.png");
+	renderEngine->releaseTexture("/legacy/tickbox.png");
+	renderEngine->releaseTexture("/legacy/tickbox_hovered.png");
 	renderEngine->clearDecodedTextureCache();
 }
 
