@@ -127,6 +127,19 @@ struct DsiTexture
 	bool clamp = false;
 	bool allocated = false;
 	bool paletted = false; // Set by uploadTexture(): which VRAM format `allocated` actually used.
+	// Set by renderTextureBeginUpload()'s highPrecision argument (RenderEngine.cpp
+	// requests this for terrain.png/gui/items.png -- see isTileAtlasResource()):
+	// skip the paletted GL_RGB256 attempt entirely and go straight to GL_RGBA.
+	// Those two atlases are large, multi-material, gradient-heavy sheets that
+	// routinely exceed the format's 256-colour-per-texture ceiling and were
+	// getting crushed to as few as ~60 shared colours for the whole atlas
+	// (tryUploadPaletted()'s quantShift loop bottoming out at shift=3) --
+	// real-hardware reports described this as "all textures look flat, no
+	// detail". Costs 2 bytes/pixel instead of 1 (e.g. +64KB for a 256x256
+	// atlas) out of the 512KB texture-image budget; not applied to every
+	// texture, just these two, so mob skins/gui.png/particles.png (which
+	// already fit the exact palette) are unaffected.
+	bool forceHighPrecision = false;
 	std::vector<std::uint8_t> rgba; // width*height*4, tightly packed RGBA8
 	// Established once by a genuine full-image upload (renderTextureImageRgba)
 	// and then REUSED, not rebuilt, by every later sub-image patch
@@ -525,7 +538,7 @@ bool uploadTexture(int name, DsiTexture& tex, bool forceRebuildPalette)
 	if (!tex.clamp)
 		param |= GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T;
 
-	if (tryUploadPaletted(name, tex, param, forceRebuildPalette))
+	if (!tex.forceHighPrecision && tryUploadPaletted(name, tex, param, forceRebuildPalette))
 	{
 		glTexParameter(0, param); // wrap bits already set above; kept for parity with callers that only touch params later
 		tex.paletted = true;
@@ -570,10 +583,18 @@ bool uploadTexture(int name, DsiTexture& tex, bool forceRebuildPalette)
 std::vector<std::uint32_t> g_lightmapColors; // RGBA8, one std::uint32_t per texel
 int g_lightmapUnit = -1; // OpenGL's GL_TEXTURE1_ARB-style enum for the lightmap unit, once seen
 
-void applyLightmapColorAt(float u, float v)
+// Looks up the baked lightmap colour at (u, v) without touching GL state.
+// Split out of applyLightmapColorAt() so a caller that ALSO has a per-vertex
+// tint colour (see drawInterleavedMesh's hasBrightness+hasColor combine
+// below) can multiply the two together before the one glColor call this
+// hardware's single texture unit gets, instead of one silently overwriting
+// the other. Returns false (leaving r8/g8/b8 untouched) exactly when there is
+// no lightmap data to look up, same condition applyLightmapColorAt used to
+// silently no-op on.
+bool lightmapColorAt(float u, float v, std::uint8_t& r8, std::uint8_t& g8, std::uint8_t& b8)
 {
 	if (g_lightmapColors.empty())
-		return;
+		return false;
 
 	const int side = static_cast<int>(g_lightmapColors.size());
 	// Only exact square counts are handled; anything else falls back to doing
@@ -582,7 +603,7 @@ void applyLightmapColorAt(float u, float v)
 	while ((sqrtSide + 1) * (sqrtSide + 1) <= side)
 		++sqrtSide;
 	if (sqrtSide * sqrtSide != side || sqrtSide <= 0)
-		return;
+		return false;
 
 	auto clampIndex = [](float value, int maxIndex) -> int
 	{
@@ -596,10 +617,18 @@ void applyLightmapColorAt(float u, float v)
 	const int row = clampIndex(v, sqrtSide - 1);
 	const std::uint32_t packed = g_lightmapColors[static_cast<std::size_t>(row) * sqrtSide + col];
 
-	const float r = ((packed >> 0) & 0xFF) / 255.0f;
-	const float g = ((packed >> 8) & 0xFF) / 255.0f;
-	const float b = ((packed >> 16) & 0xFF) / 255.0f;
-	glColor3f(r, g, b);
+	r8 = static_cast<std::uint8_t>((packed >> 0) & 0xFF);
+	g8 = static_cast<std::uint8_t>((packed >> 8) & 0xFF);
+	b8 = static_cast<std::uint8_t>((packed >> 16) & 0xFF);
+	return true;
+}
+
+void applyLightmapColorAt(float u, float v)
+{
+	std::uint8_t r8, g8, b8;
+	if (!lightmapColorAt(u, v, r8, g8, b8))
+		return;
+	glColor3f(r8 / 255.0f, g8 / 255.0f, b8 / 255.0f);
 }
 
 // -----------------------------------------------------------------------------
@@ -778,6 +807,28 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 	{
 		const std::uint8_t* vertex = base + (std::size_t)i * mesh.stride;
 
+		// Real-hardware evidence this fixes: vanilla's block renderer (see
+		// RenderBlocks.cpp) calls setBrightness() (the lightmap UV, i.e. the
+		// world's actual light level at this vertex) and THEN setColorOpaque_F()
+		// (the per-face shade / biome-tint / ambient-occlusion colour) for
+		// essentially every face it emits -- that is the normal vanilla call
+		// order, meant for a real second texture unit where the two combine by
+		// GL_MODULATE hardware multiply. This backend has only one texture
+		// unit, so applyLightmapColorAt() bakes the lightmap into glColor
+		// instead -- but issuing that call and then unconditionally calling
+		// glColor3b() again for hasColor used to make the SECOND call win,
+		// discarding the lightmap colour outright. Every tinted/shaded face
+		// (which is nearly all of them -- water, foliage, and every per-face
+		// top/side shade) rendered at its raw tint regardless of actual light
+		// level: water always "fully lit" white even at night, and every block
+		// losing its day/night and torch-light darkening, matching the
+		// real-hardware reports of water looking flat white and terrain
+		// looking flat/undetailed. Fix: when a vertex carries both, multiply
+		// the two colours together (texture x lightmap x tint, the same
+		// three-way combine GL_MODULATE would have done) and issue ONE glColor
+		// call with the result, instead of one silently overwriting the other.
+		bool haveLightmapColor = false;
+		std::uint8_t lightmapR = 255, lightmapG = 255, lightmapB = 255;
 		if (mesh.hasBrightness)
 		{
 			// Brightness carries the lightmap (u, v) pair as two floats, the
@@ -786,13 +837,26 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 			// comment block above.
 			float uv[2];
 			std::memcpy(uv, vertex + mesh.brightnessOffset, sizeof(uv));
-			applyLightmapColorAt(uv[0], uv[1]);
+			haveLightmapColor = lightmapColorAt(uv[0], uv[1], lightmapR, lightmapG, lightmapB);
 		}
 		if (mesh.hasColor)
 		{
 			std::uint8_t rgba[4];
 			std::memcpy(rgba, vertex + mesh.colorOffset, sizeof(rgba));
-			glColor3b(rgba[0], rgba[1], rgba[2]);
+			if (haveLightmapColor)
+			{
+				glColor3b(static_cast<std::uint8_t>((static_cast<int>(lightmapR) * rgba[0]) / 255),
+				          static_cast<std::uint8_t>((static_cast<int>(lightmapG) * rgba[1]) / 255),
+				          static_cast<std::uint8_t>((static_cast<int>(lightmapB) * rgba[2]) / 255));
+			}
+			else
+			{
+				glColor3b(rgba[0], rgba[1], rgba[2]);
+			}
+		}
+		else if (haveLightmapColor)
+		{
+			glColor3f(lightmapR / 255.0f, lightmapG / 255.0f, lightmapB / 255.0f);
 		}
 		if (mesh.hasNormals)
 		{
@@ -1159,7 +1223,7 @@ void renderTextureParameters(bool blur, bool, bool clamp)
 int renderGetMaxAnisotropy() { return 1; } // No anisotropic filtering on this hardware.
 int renderGetMaxSamples() { return 1; }    // No MSAA on this hardware.
 
-bool renderTextureBeginUpload(int texture, int width, int height, int, bool blur, bool clamp, bool, bool)
+bool renderTextureBeginUpload(int texture, int width, int height, int, bool blur, bool clamp, bool, bool highPrecision)
 {
 	renderBindTexture(texture);
 	DsiTexture* tex = textureSlot(texture);
@@ -1169,6 +1233,7 @@ bool renderTextureBeginUpload(int texture, int width, int height, int, bool blur
 	tex->height = height;
 	tex->blur = blur;
 	tex->clamp = clamp;
+	tex->forceHighPrecision = highPrecision;
 	return true;
 }
 

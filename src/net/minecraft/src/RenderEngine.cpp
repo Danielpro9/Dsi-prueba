@@ -416,7 +416,20 @@ bool RenderEngine::loadTextureStreamInto(const std::string &s, int_t texture, st
 			Config::setIconWidthTerrain(image->getWidth() / 16);
 		else if (image && normalizedPath == "/gui/items.png")
 			Config::setIconWidthItems(image->getWidth() / 16);
+#if PLATFORM_DSI
+		// DSi only: terrain.png/gui/items.png are large multi-material atlases
+		// that blow past the paletted GL_RGB256 format's 256-colour ceiling and
+		// were getting crushed down to ~60 shared colours for the whole atlas --
+		// see RenderAPI_DSI.cpp's DsiTexture::forceHighPrecision comment. Ask for
+		// the uncompressed path for just these two; not done on Wii/PC, where
+		// highPrecision already means something different (Wii deliberately
+		// picks the CHEAPER RGB5A3 format for terrain -- see setupTexture()'s own
+		// comment below -- so defaulting it on there would be a regression, not
+		// a fix).
+		setupTexture(uploadImage, texture, isTileAtlasResource(s), isTerrainAlphaFixResource(s), isTileAtlasResource(s));
+#else
 		setupTexture(uploadImage, texture, isTileAtlasResource(s), isTerrainAlphaFixResource(s));
+#endif
 	}
 	catch (...)
 	{
