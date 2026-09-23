@@ -4,12 +4,14 @@
 #include "java/Math.h"
 
 #include <cmath>
+#include <typeinfo>
 
 #include "AxisAlignedBB.h"
 #include "Entity.h"
 #include "EntityPlayer.h"
 #include "MathHelper.h"
 #include "PathEntity.h"
+#include "platform/Log.h"
 #include "platform/PlatformTuning.h"
 #include "Vec3D.h"
 #include "World.h"
@@ -145,6 +147,26 @@ void EntityCreature::updatePlayerActionState()
 
 			if (hasAttacked && playerToAttack != nullptr)
 			{
+#if PLATFORM_DSI
+				// Fall-through diagnostic, next iteration: real-hardware logs
+				// show a hostile mob (skeleton) as the very first entity to
+				// corrupt in a session, at its own ticksExisted=5 -- before
+				// the player or anything else in the same log -- which rules
+				// out "inherited the player's already-bad position" as the
+				// origin for at least that case. This is the one place a
+				// creature reads through playerToAttack instead of its own
+				// state, so it is worth checking directly: if the pointer
+				// were stale (freed player, reused memory) or the referenced
+				// player already corrupted for its own reasons, posX/posZ
+				// here would already be non-finite before this math ever
+				// touches them.
+				if (!std::isfinite(playerToAttack->posX) || !std::isfinite(playerToAttack->posZ))
+				{
+					MC_LOG_WARN("dsi", "EntityCreature attack-facing: playerToAttack has non-finite position ticksExisted=%d entity=%s this=%p playerToAttack=%p posX=%.3f posZ=%.3f\n",
+						(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this),
+						static_cast<const void*>(playerToAttack), playerToAttack->posX, playerToAttack->posZ);
+				}
+#endif
 #if PLATFORM_FLOAT_ENTITY_AI_MATH
 				const float targetDx = (float)(playerToAttack->posX - posX);
 				const float targetDz = (float)(playerToAttack->posZ - posZ);
