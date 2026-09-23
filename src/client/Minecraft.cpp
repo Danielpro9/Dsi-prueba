@@ -12,6 +12,9 @@
 #include "platform/Profiler.h"
 #include "platform/WorldLoadTrace.h"
 #include "client/ClientProfiler.h"
+#if PLATFORM_DSI
+#include "dsi/DsiEarlyInit.h"
+#endif
 
 #include <iostream>
 #include <cstdlib>
@@ -1915,6 +1918,26 @@ void Minecraft::runTick()
             clientPhaseStartNs = System::nanoTime();
             theWorld->tick();
             ClientProfiler::tickPhase("worldTick", System::nanoTime() - clientPhaseStartNs);
+#if PLATFORM_DSI
+            // Real-hardware evidence: committed heap grew monotonically through an
+            // entire play session (7489KB -> 13057KB, approaching the 13557KB
+            // ceiling) with no clear culprit identified yet. Loaded chunk count,
+            // entity count and tile entity count are the three things in World
+            // that could plausibly grow unboundedly during exploration -- report
+            // all three alongside heap on the same ~1s cadence Display_dsi.cpp's
+            // heartbeat() already uses, so the next real-hardware log gives a
+            // number to correlate the heap trend against instead of guessing
+            // which one (or something else entirely) is the actual growth.
+            static unsigned int s_memTrendTick = 0;
+            if (++s_memTrendTick % 60 == 0)
+            {
+                MC_LOG_INFO("dsi", "memtrend heap=%u/%uKB chunks=%d entities=%u tileEntities=%u\n",
+                    (unsigned)(dsiGetHeapCommitted() / 1024u), (unsigned)(dsiGetHeapCeiling() / 1024u),
+                    (int)theWorld->getLoadedChunkCount(),
+                    (unsigned)theWorld->loadedEntityList.size(),
+                    (unsigned)theWorld->loadedTileEntityList.size());
+            }
+#endif
         }
         if (!isGamePaused && theWorld != nullptr)
         {
