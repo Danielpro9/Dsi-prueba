@@ -204,6 +204,20 @@ Slot *GuiContainerCreative::getControllerNavigationTarget(Slot *selected, int_t 
     {
         if (row < 8)
             return inventorySlots->slots[(row + 1) * 8 + column];
+#if PLATFORM_DSI
+        // Real-hardware report: pressing Down at the last visible row jumped
+        // straight to the hotbar and could never reach items further down the
+        // list -- the "step onto the hotbar instead of scrolling" choice below
+        // (PS2/Wii's own comment: "scrolling is the right stick's job") relies
+        // on an analog stick DSi does not have, so nothing else ever advanced
+        // currentScroll downward for it. Asymmetric with the dirY < 0 branch
+        // above, which already tries scrollRows(-1) before giving up -- mirror
+        // that here: scroll first, and only step onto the hotbar once
+        // scrollRows(1) reports there is nothing left to reveal (already on
+        // the last row).
+        if (scrollRows(1))
+            return selected;
+#endif
         // Below the last grid row sits the hotbar (slots 72..80, same column
         // pitch). Step onto it instead of scrolling the list; scrolling is the
         // right stick's job, so the D-pad can always reach the hotbar.
