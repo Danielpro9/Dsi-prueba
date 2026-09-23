@@ -1287,7 +1287,7 @@ void Entity::moveFlying(float f, float f1, float f2)
 	// down directly whether f2 (movementFactor, which goes to infinity if a
 	// block's slipperiness*0.91 cubes to zero in moveEntityWithHeading) or
 	// rotationYaw is already bad walking in.
-	if (!std::isfinite(f2) || !std::isfinite(rotationYaw) || !std::isfinite(f4) || !std::isfinite(f5))
+	if (!std::isfinite(f2) || !std::isfinite(rotationYaw) || !std::isfinite(f4) || !std::isfinite(f5) || !std::isfinite(motionX) || !std::isfinite(motionZ))
 	{
 		MC_LOG_WARN("dsi", "moveFlying: bad input ticksExisted=%d entity=%s f=%.6f f1=%.6f f2=%.6f rotationYaw=%.6f f4=%.6f f5=%.6f motionXBefore=%.6f motionZBefore=%.6f\n",
 			(int)ticksExisted, typeid(*this).name(), (double)f, (double)f1, (double)f2, (double)rotationYaw, (double)f4, (double)f5, motionX, motionZ);
@@ -1295,6 +1295,28 @@ void Entity::moveFlying(float f, float f1, float f2)
 #endif
 	motionX += f * f5 - f1 * f4;
 	motionZ += f1 * f5 + f * f4;
+#if PLATFORM_DSI
+	// Last gap in this specific call chain: every checkpoint up to and
+	// including the line above's own operands (f/f1/f2/rotationYaw/f4/f5,
+	// and now motionX/motionZ themselves just before the +=, added above)
+	// has come back finite on every real-hardware run so far, yet
+	// moveEntity() still finds motionX/motionZ NaN a few lines after this
+	// function returns. If finite-in still produces non-finite-out right
+	// here, that stops being a logic bug anywhere in this codebase's own
+	// arithmetic and starts pointing at something writing over this
+	// object's memory between this line and moveEntity()'s read of it --
+	// which, on this single-threaded target, can only be another function
+	// call in between, not concurrent access. The only code that runs
+	// between here and moveEntity() is the ladder-velocity-clamp block
+	// (motionX/motionZ clamped to ±0.15, never assigned a computed value)
+	// and, for water/lava callers, nothing at all -- neither can produce
+	// this from a finite value.
+	if (!std::isfinite(motionX) || !std::isfinite(motionZ))
+	{
+		MC_LOG_WARN("dsi", "moveFlying: motionX/motionZ became non-finite from this call's own += ticksExisted=%d entity=%s this=%p f=%.6f f1=%.6f f5=%.6f f4=%.6f motionX=%.6f motionZ=%.6f\n",
+			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (double)f, (double)f1, (double)f5, (double)f4, motionX, motionZ);
+	}
+#endif
 }
 
 int_t Entity::getBrightnessForRender(float)
