@@ -763,29 +763,29 @@ void EntityLiving::onUpdate()
 	// Entity::onUpdate() (onEntityUpdate() -> handleWaterMovement() ->
 	// World::handleMaterialAcceleration()'s flow-vector normalize(), a
 	// classic 0-length-vector NaN source in vanilla Minecraft) runs BEFORE
-	// onLivingUpdate()/moveEntityWithHeading() in this same function. A
-	// separate latch (independent of moveEntityWithHeading's own) says
-	// whether motion goes bad specifically during that call.
-	const bool dsiTrackTick = isPlayer();
+	// onLivingUpdate()/moveEntityWithHeading() in this same function.
+	//
+	// Widened from isPlayer()-only and unlatched, same reasoning as every
+	// other check this session: a chicken, two skeletons and a zombie have
+	// all shown the identical corruption, and a shared static latch across
+	// entities could suppress one entity's own first bad tick after another
+	// entity had already tripped it.
 	const bool dsiFiniteBeforeEntityUpdate = std::isfinite(motionX) && std::isfinite(motionZ);
-	static bool s_dsiMotionWasFiniteTick = true;
 #endif
 	Entity::onUpdate();
 #if PLATFORM_DSI
-	if (dsiTrackTick)
 	{
 		const bool dsiFiniteAfterEntityUpdate = std::isfinite(motionX) && std::isfinite(motionZ);
-		if (dsiFiniteBeforeEntityUpdate && !dsiFiniteAfterEntityUpdate && s_dsiMotionWasFiniteTick)
+		if (dsiFiniteBeforeEntityUpdate && !dsiFiniteAfterEntityUpdate)
 		{
-			MC_LOG_WARN("dsi", "EntityLiving::onUpdate: motion became non-finite INSIDE Entity::onUpdate() ticksExisted=%d onGround=%d isInWater=%d\n",
-				(int)ticksExisted, (int)onGround, (int)isInWater());
+			MC_LOG_WARN("dsi", "EntityLiving::onUpdate: motion became non-finite INSIDE Entity::onUpdate() ticksExisted=%d entity=%s this=%p onGround=%d isInWater=%d\n",
+				(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (int)onGround, (int)isInWater());
 		}
-		else if (!dsiFiniteBeforeEntityUpdate && s_dsiMotionWasFiniteTick)
+		else if (!dsiFiniteBeforeEntityUpdate)
 		{
-			MC_LOG_WARN("dsi", "EntityLiving::onUpdate: motion ALREADY non-finite BEFORE Entity::onUpdate() ticksExisted=%d onGround=%d\n",
-				(int)ticksExisted, (int)onGround);
+			MC_LOG_WARN("dsi", "EntityLiving::onUpdate: motion ALREADY non-finite BEFORE Entity::onUpdate() ticksExisted=%d entity=%s this=%p onGround=%d\n",
+				(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (int)onGround);
 		}
-		s_dsiMotionWasFiniteTick = dsiFiniteAfterEntityUpdate;
 	}
 #endif
 	if (arrowHitTempCounter > 0)
@@ -1637,16 +1637,15 @@ void EntityLiving::onLivingUpdate()
 	// is still bad here despite addVelocity()'s own check staying quiet, the
 	// corruption is neither addVelocity() nor anything reachable from this
 	// function this tick, and the search moves outside onLivingUpdate() again.
-	if (isPlayer())
+	// Widened from isPlayer()-only and unlatched, same reasoning as every
+	// other check this session.
 	{
-		static bool s_dsiMotionWasFiniteEnd = true;
 		const bool dsiFiniteAtEnd = std::isfinite(motionX) && std::isfinite(motionZ);
-		if (!dsiFiniteAtEnd && s_dsiMotionWasFiniteEnd)
+		if (!dsiFiniteAtEnd)
 		{
-			MC_LOG_WARN("dsi", "onLivingUpdate: motion non-finite at end of function ticksExisted=%d onGround=%d\n",
-				(int)ticksExisted, (int)onGround);
+			MC_LOG_WARN("dsi", "onLivingUpdate: motion non-finite at end of function ticksExisted=%d entity=%s this=%p onGround=%d\n",
+				(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (int)onGround);
 		}
-		s_dsiMotionWasFiniteEnd = dsiFiniteAtEnd;
 	}
 #endif
 }

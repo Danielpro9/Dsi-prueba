@@ -474,13 +474,15 @@ void Entity::setPosition(double d, double d1, double d2)
 	// corrupted, not the block data (already confirmed loaded and solid by the
 	// existing "falling:" diagnostic). boundingBox's X/Z is built from `width`
 	// here and nowhere else, so if this is ever NaN/non-finite, this is the
-	// exact moment and call site it entered -- isPlayer() only, unthrottled
-	// (setPosition() on a player is not a hot per-frame call the way tick-loop
-	// code is).
-	if (isPlayer() && (!std::isfinite(width) || !std::isfinite(d) || !std::isfinite(d2)))
+	// exact moment and call site it entered. Widened from isPlayer()-only --
+	// same reasoning as every other check this session: a chicken, two
+	// skeletons and a zombie have all shown the identical corruption, so an
+	// isPlayer() gate just hides every non-player occurrence. Unthrottled
+	// (setPosition() is not a hot per-frame call the way tick-loop code is).
+	if (!std::isfinite(width) || !std::isfinite(d) || !std::isfinite(d2))
 	{
-		MC_LOG_WARN("dsi", "setPosition NaN: d=%.3f d1=%.3f d2=%.3f width=%.3f height=%.3f yOffset=%.3f ySize=%.3f ticksExisted=%d\n",
-			d, d1, d2, (double)width, (double)height, (double)yOffset, (double)ySize, (int)ticksExisted);
+		MC_LOG_WARN("dsi", "setPosition NaN: entity=%s this=%p d=%.3f d1=%.3f d2=%.3f width=%.3f height=%.3f yOffset=%.3f ySize=%.3f ticksExisted=%d\n",
+			typeid(*this).name(), static_cast<const void*>(this), d, d1, d2, (double)width, (double)height, (double)yOffset, (double)ySize, (int)ticksExisted);
 	}
 	g_dsiLastXWrite = "setPosition";
 	g_dsiLastZWrite = "setPosition";
@@ -530,16 +532,22 @@ void Entity::onEntityUpdate()
 	// itself runs) to catch the exact tick something -- most likely an
 	// out-of-bounds write from an entirely unrelated subsystem, given how many
 	// legitimate call sites have now been ruled out -- corrupts it.
-	if (isPlayer())
+	//
+	// Widened from isPlayer()-only and unlatched: a chicken, two skeletons
+	// and a zombie have all shown the identical fall-through corruption
+	// (none of them are particle-effect classes either, so "noClip true" is
+	// exactly as unexpected for them as for the player), and the previous
+	// shared static latch could suppress one entity's first bad tick if
+	// another entity had already tripped it earlier in the same session.
+	// entity=%s in the log line is enough to recognize and disregard an
+	// actual particle-effect hit if one ever shows up here.
 	{
-		static bool s_dsiNoClipWasFalse = true;
 		const bool dsiNoClipNow = noClip;
-		if (dsiNoClipNow && s_dsiNoClipWasFalse)
+		if (dsiNoClipNow)
 		{
-			MC_LOG_WARN("dsi", "onEntityUpdate: noClip unexpectedly true ticksExisted=%d posX=%.3f posY=%.3f posZ=%.3f motionX=%.6f motionY=%.6f motionZ=%.6f onGround=%d isDead=%d thisPtr=%p\n",
-				(int)ticksExisted, posX, posY, posZ, motionX, motionY, motionZ, (int)onGround, (int)isDead, (const void*)this);
+			MC_LOG_WARN("dsi", "onEntityUpdate: noClip unexpectedly true ticksExisted=%d entity=%s this=%p posX=%.3f posY=%.3f posZ=%.3f motionX=%.6f motionY=%.6f motionZ=%.6f onGround=%d isDead=%d\n",
+				(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), posX, posY, posZ, motionX, motionY, motionZ, (int)onGround, (int)isDead);
 		}
-		s_dsiNoClipWasFalse = !dsiNoClipNow;
 	}
 #endif
 	if (ridingEntity != nullptr && ridingEntity->isDead)
@@ -684,15 +692,25 @@ void Entity::moveEntity(double d, double d1, double d2)
 	// entry, before anything here can change boundingBox, and only logged on
 	// a finite<->non-finite transition (not every call) so this stays cheap
 	// and the log shows the exact tick where it flips either way.
-	if (isPlayer())
+	//
+	// Widened from isPlayer()-only (same reasoning as every other check this
+	// session -- a chicken, two skeletons and a zombie have all shown the
+	// identical corruption). s_boxWasFinite stays a single shared latch
+	// rather than per-entity: with the boundingBox self-heal in World.cpp
+	// now rebuilding a corrupted box back to finite every tick, an unlatched
+	// or per-entity version of this specific check would spam once per tick
+	// per simultaneously-corrupted entity for no more signal than
+	// moveEntity's own per-tick "d/d2 already non-finite" check already
+	// gives; this one's job is just to catch the moment ANY entity's box
+	// first flips, which the shared latch still does.
 	{
-		static bool s_boxWasFinite = true;
 		const bool nowFinite = std::isfinite(boundingBox->minX) && std::isfinite(boundingBox->minZ)
 			&& std::isfinite(boundingBox->maxX) && std::isfinite(boundingBox->maxZ);
+		static bool s_boxWasFinite = true;
 		if (nowFinite != s_boxWasFinite)
 		{
-			MC_LOG_WARN("dsi", "moveEntity boundingBox finite-state changed: nowFinite=%d ticksExisted=%d posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f requestedD=%.6f requestedD2=%.6f onGround=%d minX=%.3f maxX=%.3f minZ=%.3f maxZ=%.3f lastXWrite=%s lastZWrite=%s rotationYaw=%.6f prevRotationYaw=%.6f width=%.6f\n",
-				(int)nowFinite, (int)ticksExisted, posX, posZ, motionX, motionZ, d, d2, (int)onGround,
+			MC_LOG_WARN("dsi", "moveEntity boundingBox finite-state changed: nowFinite=%d ticksExisted=%d entity=%s this=%p posX=%.3f posZ=%.3f motionX=%.6f motionZ=%.6f requestedD=%.6f requestedD2=%.6f onGround=%d minX=%.3f maxX=%.3f minZ=%.3f maxZ=%.3f lastXWrite=%s lastZWrite=%s rotationYaw=%.6f prevRotationYaw=%.6f width=%.6f\n",
+				(int)nowFinite, (int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), posX, posZ, motionX, motionZ, d, d2, (int)onGround,
 				boundingBox->minX, boundingBox->maxX, boundingBox->minZ, boundingBox->maxZ, g_dsiLastXWrite, g_dsiLastZWrite,
 				(double)rotationYaw, (double)prevRotationYaw, (double)width);
 			s_boxWasFinite = nowFinite;
@@ -1479,10 +1497,14 @@ void Entity::addVelocity(double d, double d1, double d2)
 	// addVelocity() is also this codebase's single general "add to motion" entry
 	// point (potions, knockback, water/lava push, etc.), so checking here catches
 	// any caller that hands it a non-finite delta, not just this one suspect.
-	if (isPlayer() && (!std::isfinite(d) || !std::isfinite(d2)))
+	// Widened from isPlayer()-only: entity-push-collision runs on any pair of
+	// nearby entities, not just the player, and a chicken/skeleton/zombie
+	// have all shown the identical corruption -- this is exactly the kind of
+	// shared infrastructure an isPlayer() gate would hide a non-player hit on.
+	if (!std::isfinite(d) || !std::isfinite(d2))
 	{
-		MC_LOG_WARN("dsi", "addVelocity NaN: d=%.6f d1=%.6f d2=%.6f motionX=%.6f motionZ=%.6f ticksExisted=%d onGround=%d\n",
-			d, d1, d2, motionX, motionZ, (int)ticksExisted, (int)onGround);
+		MC_LOG_WARN("dsi", "addVelocity NaN: entity=%s this=%p d=%.6f d1=%.6f d2=%.6f motionX=%.6f motionZ=%.6f ticksExisted=%d onGround=%d\n",
+			typeid(*this).name(), static_cast<const void*>(this), d, d1, d2, motionX, motionZ, (int)ticksExisted, (int)onGround);
 	}
 #endif
 	motionX += d;
