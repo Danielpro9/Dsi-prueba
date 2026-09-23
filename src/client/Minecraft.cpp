@@ -3,7 +3,6 @@
 #include "net/minecraft/src/WorldInfo.h"
 #include "client/Minecraft.h"
 #include "platform/Log.h"
-#include <cmath>
 #include "platform/ConsoleAspectRatio.h"
 #include "platform/PlatformTuning.h"
 #include "platform/PlatformCompat.h"
@@ -962,56 +961,10 @@ void Minecraft::run()
                     if (validateHeapThisFrame)
                         validateProcessHeap("before world render");
 
-#if PLATFORM_DSI
-                    // Fall-through diagnostic, next iteration: runTick()'s own
-                    // top-of-function check (added last round) shows the box already
-                    // corrupted before that tick's OWN player update ran, yet the
-                    // PRECEDING tick's own player-update diagnostics stayed clean --
-                    // meaning the corruption happens somewhere between one tick's
-                    // player update finishing and the next tick's runTick() starting.
-                    // That span covers two very different things: the rest of that
-                    // same tick's own processing (other entities, world tick --
-                    // both still inside runTick(), and already narrowed further by
-                    // checks there) OR this frame's world RENDER pass
-                    // (entityRenderer->updateCameraAndRender(), which is called from
-                    // here, entirely OUTSIDE runTick() and therefore invisible to
-                    // every tick-side check so far) -- chunk mesh building runs in
-                    // here (WorldRendererDsi.cpp's incremental updateRenderer(),
-                    // very active on a freshly loaded/still-streaming world) and has
-                    // never been instrumented. Bracket the render call itself.
-                    static bool s_dsiPreRenderWasFinite = true;
-                    bool dsiFiniteBeforeRender = true;
-                    if (thePlayer != nullptr)
-                    {
-                        dsiFiniteBeforeRender = std::isfinite(thePlayer->motionX) && std::isfinite(thePlayer->motionZ) &&
-                            std::isfinite(thePlayer->boundingBox->minX) && std::isfinite(thePlayer->boundingBox->minZ);
-                        if (!dsiFiniteBeforeRender && s_dsiPreRenderWasFinite)
-                        {
-                            MC_LOG_WARN("dsi", "Minecraft render: ALREADY non-finite before updateCameraAndRender ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
-                                (int)thePlayer->ticksExisted, thePlayer->motionX, thePlayer->motionZ,
-                                thePlayer->boundingBox->minX, thePlayer->boundingBox->minZ);
-                        }
-                        s_dsiPreRenderWasFinite = dsiFiniteBeforeRender;
-                    }
-#endif
                     const long_t clientRenderStartNs = System::nanoTime();
                     entityRenderer->updateCameraAndRender(timer->renderPartialTicks);
                     clientRenderNs = System::nanoTime() - clientRenderStartNs;
                     ClientProfiler::render(clientRenderNs);
-#if PLATFORM_DSI
-                    if (thePlayer != nullptr && dsiFiniteBeforeRender)
-                    {
-                        const bool dsiFiniteAfterRender = std::isfinite(thePlayer->motionX) && std::isfinite(thePlayer->motionZ) &&
-                            std::isfinite(thePlayer->boundingBox->minX) && std::isfinite(thePlayer->boundingBox->minZ);
-                        if (!dsiFiniteAfterRender)
-                        {
-                            MC_LOG_WARN("dsi", "Minecraft render: became non-finite DURING updateCameraAndRender ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
-                                (int)thePlayer->ticksExisted, thePlayer->motionX, thePlayer->motionZ,
-                                thePlayer->boundingBox->minX, thePlayer->boundingBox->minZ);
-                        }
-                        s_dsiPreRenderWasFinite = dsiFiniteAfterRender;
-                    }
-#endif
 
                     if (validateHeapThisFrame)
                     {
@@ -1555,38 +1508,6 @@ void Minecraft::startCheckHasPaidThread()
 
 void Minecraft::runTick()
 {
-#if PLATFORM_DSI
-    // Fall-through diagnostic, next iteration: EntityPlayerSP::onLivingUpdate()'s
-    // own entry check (added last round) still shows the box ALREADY corrupted
-    // before that function's very first line runs -- even on a freshly loaded
-    // world at ticksExisted=41, with motionX/motionZ genuinely at rest (0.0) --
-    // which rules out that whole ~140-line pre-base block too, on top of every
-    // write site inside it already ruled out in earlier rounds. That leaves
-    // everything between one tick's player update and the next: the rest of
-    // THIS tick's own processing (chunk cache config, input, joinChunks,
-    // entityRenderer::updateRenderer(), other entities ticked before the
-    // player inside theWorld->updateEntities(), theWorld->tick(), rendering)
-    // and the same span of the PREVIOUS tick after its own player update
-    // returned. Check right here, at the very top of runTick(), before
-    // anything in it runs: if this is already bad, the corruption sits
-    // somewhere in that shared span across two ticks; if it is still fine
-    // here but bad by the time updateEntities() reaches the player, the
-    // window narrows to this tick's own input/chunk-cache/render-update code
-    // that runs between here and there.
-    if (thePlayer != nullptr)
-    {
-        static bool s_dsiRunTickWasFinite = true;
-        const bool dsiFiniteAtRunTickTop = std::isfinite(thePlayer->motionX) && std::isfinite(thePlayer->motionZ) &&
-            std::isfinite(thePlayer->boundingBox->minX) && std::isfinite(thePlayer->boundingBox->minZ);
-        if (!dsiFiniteAtRunTickTop && s_dsiRunTickWasFinite)
-        {
-            MC_LOG_WARN("dsi", "Minecraft::runTick: ALREADY non-finite at very top ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
-                (int)thePlayer->ticksExisted, thePlayer->motionX, thePlayer->motionZ,
-                thePlayer->boundingBox->minX, thePlayer->boundingBox->minZ);
-        }
-        s_dsiRunTickWasFinite = dsiFiniteAtRunTickTop;
-    }
-#endif
     if (rightClickDelayTimer > 0)
         --rightClickDelayTimer;
 
@@ -1697,40 +1618,6 @@ void Minecraft::runTick()
         int_t i1 = MathHelper::floor_float((float)thePlayer->posZ) >> 4;
         configureChunkProviderCache(ichunkprovider, jv, i1, gameSettings->renderDistance);
         ClientProfiler::tickPhase("chunkCacheCfg", System::nanoTime() - clientPhaseStartNs);
-
-#if PLATFORM_DSI
-        // Real-hardware report: the player falls through solid ground a few
-        // seconds after a world finishes loading, with nothing in the log to
-        // say why -- debug.log has no instrumentation anywhere near
-        // collision/chunk-loading. Rather than keep reading the (apparently
-        // correctly-ordered) spawn/chunk-cache code and guessing, log the
-        // actual state every time the player is airborne: whether the block
-        // one step below their feet reads as solid, and whether the chunk
-        // column they are standing in is considered loaded at all. One of
-        // those being wrong on the very first log line after landing/
-        // spawning would confirm which side of "collision" is actually
-        // failing -- missing chunk data (getBlockId legitimately returning
-        // air) vs. present data the collision sweep itself is not seeing.
-        // Throttled to once every 10 ticks (0.5s) and only while airborne, so
-        // this cannot become a per-tick logging cost during normal play.
-        if (!thePlayer->onGround)
-        {
-            static int_t s_dsiFallLogTicks = 0;
-            if (++s_dsiFallLogTicks >= 10)
-            {
-                s_dsiFallLogTicks = 0;
-                const int_t footX = MathHelper::floor_double(thePlayer->posX);
-                const int_t footY = MathHelper::floor_double(thePlayer->posY) - 1;
-                const int_t footZ = MathHelper::floor_double(thePlayer->posZ);
-                const bool chunkLoaded = theWorld->chunkExists(footX >> 4, footZ >> 4);
-                const int_t blockId = theWorld->getBlockId(footX, footY, footZ);
-                MC_LOG_WARN("dsi", "falling: pos=%.1f,%.1f,%.1f motionY=%.3f chunkColumn(%d,%d)Loaded=%d blockBelowFeet(%d,%d,%d)=%d\n",
-                    (double)thePlayer->posX, (double)thePlayer->posY, (double)thePlayer->posZ,
-                    (double)thePlayer->motionY, (int)(footX >> 4), (int)(footZ >> 4),
-                    chunkLoaded ? 1 : 0, (int)footX, (int)footY, (int)footZ, (int)blockId);
-            }
-        }
-#endif
     }
 
     if (!isGamePaused && theWorld != nullptr)
@@ -2021,31 +1908,6 @@ void Minecraft::runTick()
             clientPhaseStartNs = System::nanoTime();
             theWorld->updateEntities();
             ClientProfiler::tickPhase("entities", System::nanoTime() - clientPhaseStartNs);
-#if PLATFORM_DSI
-            // Fall-through diagnostic, next iteration: the render pass is now ruled
-            // out (bracketed last round, its own post-render check never fired,
-            // while the pre-render check kept catching the box already broken).
-            // The last log also showed the player's OWN tick (EntityPlayerSP entry,
-            // moveEntity transition) staying clean the tick corruption first became
-            // visible -- meaning it happens after the player's own update but still
-            // inside that same runTick() call. theWorld->updateEntities() ticks
-            // every entity, not just the player; if something ticked AFTER the
-            // player in that same call is the culprit, it will already show up
-            // right here.
-            if (thePlayer != nullptr)
-            {
-                static bool s_dsiAfterEntitiesWasFinite = true;
-                const bool dsiFiniteAfterEntities = std::isfinite(thePlayer->motionX) && std::isfinite(thePlayer->motionZ) &&
-                    std::isfinite(thePlayer->boundingBox->minX) && std::isfinite(thePlayer->boundingBox->minZ);
-                if (!dsiFiniteAfterEntities && s_dsiAfterEntitiesWasFinite)
-                {
-                    MC_LOG_WARN("dsi", "Minecraft::runTick: ALREADY non-finite right after updateEntities() ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
-                        (int)thePlayer->ticksExisted, thePlayer->motionX, thePlayer->motionZ,
-                        thePlayer->boundingBox->minX, thePlayer->boundingBox->minZ);
-                }
-                s_dsiAfterEntitiesWasFinite = dsiFiniteAfterEntities;
-            }
-#endif
         }
         if (!isGamePaused || isMultiplayerWorld())
         {
@@ -2053,25 +1915,6 @@ void Minecraft::runTick()
             clientPhaseStartNs = System::nanoTime();
             theWorld->tick();
             ClientProfiler::tickPhase("worldTick", System::nanoTime() - clientPhaseStartNs);
-#if PLATFORM_DSI
-            // Same idea, one phase later: theWorld->tick() runs block ticks, random
-            // ticks, weather, mob spawning -- none of it should touch the player's
-            // own fields, but if updateEntities() above stays clean and this still
-            // catches it, the culprit is somewhere in here instead.
-            if (thePlayer != nullptr)
-            {
-                static bool s_dsiAfterWorldTickWasFinite = true;
-                const bool dsiFiniteAfterWorldTick = std::isfinite(thePlayer->motionX) && std::isfinite(thePlayer->motionZ) &&
-                    std::isfinite(thePlayer->boundingBox->minX) && std::isfinite(thePlayer->boundingBox->minZ);
-                if (!dsiFiniteAfterWorldTick && s_dsiAfterWorldTickWasFinite)
-                {
-                    MC_LOG_WARN("dsi", "Minecraft::runTick: ALREADY non-finite right after theWorld->tick() ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
-                        (int)thePlayer->ticksExisted, thePlayer->motionX, thePlayer->motionZ,
-                        thePlayer->boundingBox->minX, thePlayer->boundingBox->minZ);
-                }
-                s_dsiAfterWorldTickWasFinite = dsiFiniteAfterWorldTick;
-            }
-#endif
         }
         if (!isGamePaused && theWorld != nullptr)
         {

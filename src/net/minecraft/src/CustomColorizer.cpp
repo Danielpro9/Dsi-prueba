@@ -57,9 +57,18 @@ void CustomColorizer::update(RenderEngine *engine)
 
 	// These three maps are honored even with Custom Colors off, matching C6's
 	// biome colormap replacement behavior.
+	// watercolor.png (no "X") is the real asset name -- confirmed by two
+	// other places in this codebase that load the same file correctly
+	// (ColorizerWater.cpp's own comment, and Minecraft.cpp's own
+	// readTextureImageData("/misc/watercolor.png") call into the legacy,
+	// otherwise-unused ColorizerWater class). The stray "X" here made
+	// hasResource() fail every time, so waterColors stayed empty and
+	// getFluidColor() below always fell through to its 0xffffff
+	// (no tint) fallback -- water rendering with its raw texture colour
+	// and no biome tint at all, i.e. looking flat/white instead of blue.
 	grassColors = loadColors(engine, "/misc/grasscolor.png", 65536);
 	foliageColors = loadColors(engine, "/misc/foliagecolor.png", 65536);
-	waterColors = loadColors(engine, "/misc/watercolorX.png", 65536);
+	waterColors = loadColors(engine, "/misc/watercolor.png", 65536);
 	if (!Config::isCustomColors()) return;
 
 	foliagePineColors = loadColors(engine, "/misc/pinecolor.png", 65536);

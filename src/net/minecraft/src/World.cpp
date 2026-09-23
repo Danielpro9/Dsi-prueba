@@ -31,7 +31,6 @@
 #include <limits>
 #include <algorithm>
 #include <cmath>
-#include <typeinfo>
 #include <unordered_set>
 #include <vector>
 #if PLATFORM_RANDOM_TICK_PROFILE_INTERVAL > 0
@@ -3379,32 +3378,6 @@ void World::updateEntities()
 #if PLATFORM_PS2 && MC_LOG_LEVEL > 2
             platformProfileEntityTick(entityTickStart, entity);
 #endif
-#if PLATFORM_DSI
-            // Fall-through diagnostic, next iteration: the corruption has been
-            // narrowed to somewhere between the player's own tick finishing and
-            // the end of this same runTick() call, with the render pass already
-            // ruled out. This loop ticks EVERY loaded entity (the player is just
-            // one entry in loadedEntityList, ticked through this exact same
-            // updateEntity() call like everything else) -- if something ticked
-            // AFTER the player here is the culprit, checking right after each
-            // entity's own tick pins down exactly which one by class name,
-            // instead of just "somewhere in updateEntities()".
-            if (!playerEntities.empty() && playerEntities[0] != nullptr)
-            {
-                EntityPlayer *dsiPlayer = playerEntities[0];
-                static bool s_dsiEntityLoopWasFinite = true;
-                const bool dsiFiniteNow = std::isfinite(dsiPlayer->motionX) && std::isfinite(dsiPlayer->motionZ) &&
-                    std::isfinite(dsiPlayer->boundingBox->minX) && std::isfinite(dsiPlayer->boundingBox->minZ);
-                if (!dsiFiniteNow && s_dsiEntityLoopWasFinite)
-                {
-                    MC_LOG_WARN("dsi", "World::updateEntities: player non-finite right after ticking %s (isPlayerItself=%d) ticksExisted=%d motionX=%.6f motionZ=%.6f minX=%.3f minZ=%.3f\n",
-                        typeid(*entity).name(), (int)(entity == static_cast<Entity *>(dsiPlayer)),
-                        (int)dsiPlayer->ticksExisted, dsiPlayer->motionX, dsiPlayer->motionZ,
-                        dsiPlayer->boundingBox->minX, dsiPlayer->boundingBox->minZ);
-                }
-                s_dsiEntityLoopWasFinite = dsiFiniteNow;
-            }
-#endif
         }
         
         if (entity->isDead)
@@ -3668,51 +3641,26 @@ void World::updateEntityWithOptionalForce(Entity* entity, bool flag)
         entity->rotationYaw = entity->prevRotationYaw;
     }
 #if PLATFORM_DSI
-    // Real-hardware logs show motionX/motionZ can go NaN and then SELF-
-    // PERPETUATE forever: moveEntityWithHeading()'s own per-tick friction
-    // (`motionX *= f2;`) can only ever turn a finite value into a smaller
-    // finite value or leave a NaN as NaN -- there is no legitimate write in
-    // this codebase that ever brings a NaN motionX back to finite on its
-    // own. Once it goes bad on any one tick, every later tick keeps feeding
-    // that NaN into moveEntity(), which is what the boundingBox repair right
-    // below has to keep undoing every single tick -- posX/posY/posZ get
-    // reset back to the exact same lastTick value forever, which is the
-    // player standing still and permanently unable to move, not falling.
-    // Reset motion the same way position already is: back to zero (not
-    // "last tick's motion", since a NaN motion carries no recoverable
-    // direction/speed to restore) so the next tick's own input can compute
-    // a fresh value from scratch instead of multiplying a poisoned one.
+    // Silent safety net, kept after the fall-through/freeze investigation
+    // found and fixed its real root cause (src/java/fdlibm/fdlibm.h's
+    // endianness auto-detection never recognized ARM, so sqrt/trig routines
+    // read the wrong half of every double -- see Entity::moveFlying()).
+    // Confirmed fixed by a full real-hardware session with zero corruption
+    // logged afterwards. These two repairs are just isfinite() checks --
+    // effectively free -- so they stay as cheap insurance against a NaN
+    // motion/boundingBox ever reappearing from an unrelated cause, rather
+    // than reopening the permanent-freeze failure mode for no real
+    // performance gain.
     if (!std::isfinite(entity->motionX) || !std::isfinite(entity->motionY) || !std::isfinite(entity->motionZ))
     {
-        MC_LOG_WARN("dsi", "World::updateEntityWithOptionalForce: resetting non-finite motion for %s motionX=%.6f motionY=%.6f motionZ=%.6f\n",
-            typeid(*entity).name(), entity->motionX, entity->motionY, entity->motionZ);
         entity->motionX = 0.0;
         entity->motionY = 0.0;
         entity->motionZ = 0.0;
     }
-#endif
-#if PLATFORM_DSI
-    // This function already repairs posX/posY/posZ/rotation from NaN/Inf by
-    // falling back to last-tick values -- but it never touched boundingBox,
-    // which real-hardware logs show is what actually goes bad (motionX/
-    // motionZ and posX/posY/posZ often stay perfectly finite the whole time).
-    // Once the box alone is NaN, every future sweep/collision call keeps
-    // consuming and re-emitting NaN forever: posX gets reset here every tick
-    // (matching the "frozen in place" symptom), but the box that all
-    // collision math actually reads never recovers on its own. Rebuilding it
-    // from the now-guaranteed-finite posX/posY/posZ (setPosition() recomputes
-    // every bound from width/height/yOffset/ySize, ignoring whatever was
-    // there before) is the same repair-from-last-known-good idea already
-    // used above, extended to the field that was actually missing it. This
-    // does not explain why the box went bad in the first place -- that is
-    // still being tracked down separately -- but it stops one bad tick from
-    // being a permanent, unrecoverable freeze.
     if (!std::isfinite(entity->boundingBox->minX) || !std::isfinite(entity->boundingBox->maxX) ||
         !std::isfinite(entity->boundingBox->minY) || !std::isfinite(entity->boundingBox->maxY) ||
         !std::isfinite(entity->boundingBox->minZ) || !std::isfinite(entity->boundingBox->maxZ))
     {
-        MC_LOG_WARN("dsi", "World::updateEntityWithOptionalForce: rebuilding non-finite boundingBox for %s this=%p posX=%.3f posY=%.3f posZ=%.3f\n",
-            typeid(*entity).name(), static_cast<const void*>(entity), entity->posX, entity->posY, entity->posZ);
         entity->setPosition(entity->posX, entity->posY, entity->posZ);
     }
 #endif

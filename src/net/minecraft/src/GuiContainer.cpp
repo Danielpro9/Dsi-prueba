@@ -294,7 +294,7 @@ bool GuiContainer::getIsMouseOverSlot(Slot *slot, int_t mouseX, int_t mouseY)
 
 void GuiContainer::mouseClicked(int_t x, int_t y, int_t button)
 {
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
 	ContainerSlotNavigator &navigator = ContainerSlotNavigator::instance();
 	// Console confirm buttons are exposed both as controller input and mouse
 	// clicks. When D-pad selection owns the inventory, ignore the synthesized
@@ -332,7 +332,7 @@ void GuiContainer::handleMouseClick(Slot *slot, int_t slotId, int_t button, bool
 
 void GuiContainer::mouseMovedOrUp(int_t x, int_t y, int_t button)
 {
-#if PLATFORM_PS2 || PLATFORM_WII
+#if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI
 	// Button release is not pointer motion. Only actual movement should take
 	// authority away from the controller-selected slot.
 	if (button < 0)

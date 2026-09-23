@@ -14,6 +14,7 @@ public:
 	void updateScreen() override;
 	bool doesGuiPauseGame() override;
 	void drawScreen(int_t mouseX, int_t mouseY, float_t partialTick) override;
+	void onGuiClosed() override;
 
 protected:
 	void actionPerformed(GuiButton *button) override;

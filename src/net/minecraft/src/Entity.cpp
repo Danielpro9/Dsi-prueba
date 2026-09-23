@@ -47,36 +47,12 @@ int_t Entity::nextEntityID = 0;
 const char* g_dsiLastXWrite = "none";
 const char* g_dsiLastZWrite = "none";
 
-// Fall-through diagnostic, next iteration: every write-site and per-tick
-// checkpoint diagnostic added so far has stayed clean despite repeated
-// corruption (motionX/motionZ NaN, and now noClip=true) with no legitimate
-// writer anywhere in this codebase -- pointing at memory corruption rather
-// than a movement-code bug. One mechanism that would produce exactly this
-// symptom without ever touching any instrumented write site: a dangling
-// pointer to the OLD player entity Minecraft::respawn() marks dead
-// (World::setEntityDead()) but does not immediately delete -- deletion is
-// deferred to a later entity-list cleanup pass, once
-// deleteWorldOwnedEntity()'s isActiveClientEntity() guard (checked against
-// mc->thePlayer/mc->renderViewEntity) no longer protects it, since respawn
-// has already reassigned those to the new player object by then. If
-// anything still holds and uses a raw pointer to that old object after it
-// is actually deleted, writes through it land in whatever the allocator
-// gave that freed block to next -- plausibly the new player object itself,
-// created moments earlier and likely nearby in a small heap. Track the
-// last few constructed EntityPlayer pointers (set from EntityPlayer's own
-// constructor, not a virtual call, since isPlayer() is unreliable this
-// late/early in an object's lifetime -- see the ~Entity() comment below)
-// and flag ~Entity() specifically when it is destroying one of them, to
-// see whether a dead old player's destruction lines up with the tick a
-// corruption is next observed.
-const void* g_dsiKnownPlayerPtrs[4] = { nullptr, nullptr, nullptr, nullptr };
-
-void dsiRegisterPlayerEntity(const void* ptr)
-{
-	for (int i = 3; i > 0; --i)
-		g_dsiKnownPlayerPtrs[i] = g_dsiKnownPlayerPtrs[i - 1];
-	g_dsiKnownPlayerPtrs[0] = ptr;
-}
+// The dangling-old-player-pointer hypothesis this tracking existed to test
+// is retired: real-hardware evidence (see Entity::moveFlying()) traced the
+// fall-through/freeze bug to a genuine fdlibm bug (src/java/fdlibm/fdlibm.h
+// never recognized ARM as little-endian, so sqrt/trig routines read the
+// wrong half of every double), not memory corruption. Confirmed fixed by a
+// full real-hardware session with zero corruption logged after that fix.
 #endif
 
 namespace
@@ -364,22 +340,6 @@ Entity::Entity(World *world) :
 
 Entity::~Entity()
 {
-#if PLATFORM_DSI
-	// isPlayer() is a virtual call and this late in destruction the derived
-	// EntityPlayer part of the object may already be torn down, so it cannot
-	// be trusted to identify a player here -- check this object's address
-	// against the last few EntityPlayer constructor calls instead (see the
-	// comment by g_dsiKnownPlayerPtrs above).
-	for (const void* ptr : g_dsiKnownPlayerPtrs)
-	{
-		if (ptr == static_cast<const void*>(this))
-		{
-			MC_LOG_WARN("dsi", "~Entity: destroying a known player entity this=%p entityId=%d isDead=%d ticksExisted=%d\n",
-				static_cast<const void*>(this), (int)entityId, (int)isDead, (int)ticksExisted);
-			break;
-		}
-	}
-#endif
 	delete dataWatcher;
 	// boundingBox now points at boundingBoxStorage (owned inline) — nothing to free.
 }
@@ -711,82 +671,13 @@ void Entity::moveEntity(double d, double d1, double d2)
 			}
 		}
 	}
-#if PLATFORM_DSI
-	// Fall-through diagnostic, next iteration: World::updateEntities()'s new
-	// per-entity check (added last round) proved the box corruption happens
-	// somewhere INSIDE the player's own moveEntity() call, on the same tick
-	// that call runs -- not in some other entity, not in world tick, not in
-	// rendering. moveEntity()'s own entry check (top of this function)
-	// stayed clean for that exact tick, so whatever happens, happens after
-	// entry. This function's own logic between entry and here has exactly
-	// one place that can rewrite `d`/`d2` before the sweep ever sees them:
-	// the onGround-and-sneaking edge-search loops just above (only taken
-	// when isPlayer() && onGround && isSneaking()). Check here, right
-	// before the sweep/collision-apply machinery that actually writes
-	// boundingBox, to bisect "broke in the sneak-edge search" from "broke
-	// in the sweep itself". Widened from isPlayer()-only: a chicken has
-	// shown the exact same corruption at a completely different location,
-	// so whatever this is is not specific to the player or to D-pad input.
-	//
-	// Next lead: every checkpoint between moveFlying()'s writes and here
-	// comes back clean (finite f/f1/f2/rotationYaw/f4/f5, finite motion at
-	// moveEntityWithHeading() entry) in the latest real-hardware logs, which
-	// is not explainable by this function's own arithmetic -- finite inputs
-	// cannot produce NaN through a plain multiply-add. That points away from
-	// a logic bug in this call chain and towards memory corruption: the
-	// corrupted entities always sit at the exact same handful of world
-	// positions across separate sessions (spawn-adjacent), first appear only
-	// a few seconds into a session, and a real player-entity destruction
-	// (the "~Entity: destroying a known player entity" log below, which
-	// already prints its own `this` pointer) has been observed in the same
-	// narrow window. Logging `this` here lets the next log directly check
-	// whether a corrupted entity's address matches one just freed --
-	// straightforward to grep for once both are pointer-tagged.
-	if (!std::isfinite(d) || !std::isfinite(d2))
-	{
-		MC_LOG_WARN("dsi", "moveEntity: d/d2 already non-finite before sweep ticksExisted=%d entity=%s this=%p d=%.6f d2=%.6f isSneaking=%d onGround=%d flag=%d isInWeb=%d\n",
-			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), d, d2, (int)isSneaking(), (int)onGround, (int)flag, (int)isInWeb);
-	}
-#endif
 #if PLATFORM_FLOAT_COLLISION_SWEEP
 	// Same statement order as the double path below, including where flag1 is
 	// sampled (before the X reset can zero d1); see the sweep helpers above.
 	worldObj->collectCollisionSweep(this, boundingBox->addCoord(d, d1, d2), s_collisionSweep);
 	SweepLocalBox sweepBox;
 	sweepRebase(boundingBox, s_collisionSweep, sweepBox);
-#if PLATFORM_DSI
-	// The previous diagnostic here (moveEntity Y: requested=... etc.) lived in
-	// the #else branch below, which PLATFORM_FLOAT_COLLISION_SWEEP -- true for
-	// DSi, since PlatformGameTuning.h's "PLATFORM_PS2 || PLATFORM_DSI" block
-	// hands DSi PS2_FLOAT_COLLISION_SWEEP=1 wholesale -- never reaches. That is
-	// why it never once appeared in a debug.log despite several real-hardware
-	// fall-through-the-floor reports: it was dead code on this platform the
-	// entire time. This is the actual path DSi takes; the diagnostic moves
-	// here, against the real inputs to the resolution step (collectCollisionSweep
-	// finding boxes, sweepApplyY clamping against them), same throttle shape as
-	// before (every ~10 ticks, airborne player only).
-	static int_t s_dsiSweepLogCounter = 0;
-	bool dsiLogThisCall = false;
-	if (isPlayer() && !onGround)
-	{
-		if (++s_dsiSweepLogCounter >= 10)
-		{
-			s_dsiSweepLogCounter = 0;
-			dsiLogThisCall = true;
-		}
-	}
-	const double d1BeforeResolve = d1;
-#endif
 	sweepApplyY(s_collisionSweep, boundingBox, sweepBox, d1);
-#if PLATFORM_DSI
-	if (dsiLogThisCall)
-		MC_LOG_WARN("dsi", "sweepY: requested=%.3f resolved=%.3f sweepBoxes=%u origin=[%d,%d,%d] localBox=[%.2f..%.2f,%.2f..%.2f,%.2f..%.2f]\n",
-			d1BeforeResolve, d1, (unsigned)s_collisionSweep.boxes.size(),
-			s_collisionSweep.originX, s_collisionSweep.originY, s_collisionSweep.originZ,
-			(double)sweepBox.minX, (double)sweepBox.maxX,
-			(double)sweepBox.minY, (double)sweepBox.maxY,
-			(double)sweepBox.minZ, (double)sweepBox.maxZ);
-#endif
 	if (!field_9293_aM && d6 != d1)
 	{
 		d = d1 = d2 = 0.0;
@@ -1163,39 +1054,19 @@ bool Entity::handleLavaMovement()
 void Entity::moveFlying(float f, float f1, float f2)
 {
 #if PLATFORM_DSI
-	// f/f1 (moveStrafing/moveForward) at entry -- the "no real input" guard
-	// right below this block does not actually catch them if they are NaN:
-	// `NaN < 0.01f` is false in IEEE 754 (every comparison with NaN is
-	// false), so a NaN f/f1 silently falls through the early return instead
-	// of being treated as "no input", then poisons f3/f/f1 and finally
-	// motionX/motionZ via the += a few lines down. This guard both stops
-	// that propagation regardless of cause and rules out the raw parameters
-	// themselves -- confirmed clean every real-hardware run so far, which
-	// narrowed the search to the rescale steps just below (see their own
-	// comments).
+	// A real fdlibm bug (see src/java/fdlibm/fdlibm.h) used to make the
+	// sqrt_float() rescale below return NaN for entirely ordinary movement
+	// input, which this guard's own "no real input" check just below can't
+	// catch for NaN specifically (`NaN < 0.01f` is false in IEEE 754, so a
+	// NaN value doesn't read as "below threshold"). Fixed at the root now,
+	// but kept as a cheap (two isfinite() calls, no I/O) defensive
+	// early-return: treating a non-finite move input as "no input" is
+	// strictly safer than letting it propagate into motionX/motionZ,
+	// whatever produces one in the future.
 	if (!std::isfinite(f) || !std::isfinite(f1))
-	{
-		MC_LOG_WARN("dsi", "moveFlying: non-finite move input, treating as no input ticksExisted=%d entity=%s f=%.6f f1=%.6f f2=%.6f\n",
-			(int)ticksExisted, typeid(*this).name(), (double)f, (double)f1, (double)f2);
 		return;
-	}
 #endif
 	float f3 = MathHelper::sqrt_float(f * f + f1 * f1);
-#if PLATFORM_DSI
-	// Real-hardware logs now prove f/f1 arrive here finite (the entry check
-	// above never fires) but are NaN by the time f4/f5 are computed a few
-	// lines down -- and f2 is independently confirmed finite too (the "bad
-	// input" check below tests it and never fires). The only unverified
-	// step left in this specific function is this rescale itself: sqrt_float
-	// of a sum of two squares of finite values should never be NaN/Inf
-	// mathematically, but it is the one call in this chain this session
-	// has not directly checked the output of.
-	if (!std::isfinite(f3))
-	{
-		MC_LOG_WARN("dsi", "moveFlying: sqrt_float produced non-finite f3 ticksExisted=%d entity=%s this=%p f=%.6f f1=%.6f f3=%.6f\n",
-			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (double)f, (double)f1, (double)f3);
-	}
-#endif
 	if (f3 < 0.01f)
 	{
 		return;
@@ -1205,31 +1076,10 @@ void Entity::moveFlying(float f, float f1, float f2)
 		f3 = 1.0f;
 	}
 	f3 = f2 / f3;
-#if PLATFORM_DSI
-	if (!std::isfinite(f3))
-	{
-		MC_LOG_WARN("dsi", "moveFlying: f2/f3 division produced non-finite f3 ticksExisted=%d entity=%s this=%p f2=%.6f f3=%.6f\n",
-			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (double)f2, (double)f3);
-	}
-#endif
 	f *= f3;
 	f1 *= f3;
-#if PLATFORM_DSI
-	if (!std::isfinite(f) || !std::isfinite(f1))
-	{
-		MC_LOG_WARN("dsi", "moveFlying: f*=f3/f1*=f3 produced non-finite result ticksExisted=%d entity=%s this=%p f=%.6f f1=%.6f f3=%.6f\n",
-			(int)ticksExisted, typeid(*this).name(), static_cast<const void*>(this), (double)f, (double)f1, (double)f3);
-	}
-#endif
 	float f4 = MathHelper::sin((rotationYaw * 3.1415927f) / 180.0f);
 	float f5 = MathHelper::cos((rotationYaw * 3.1415927f) / 180.0f);
-	// The two checks that used to live here (f2/rotationYaw/f4/f5/motionX/
-	// motionZ before the += below, and motionX/motionZ again right after
-	// it) are retired: both are now redundant with the three finer-grained
-	// checks just above (sqrt_float/f2÷f3/f*=f3), which already proved f/f1
-	// are the ones going non-finite, upstream of this line entirely -- 147
-	// matching occurrences in the latest real-hardware log, one of those
-	// three checks will name the exact culprit line next round.
 	motionX += f * f5 - f1 * f4;
 	motionZ += f1 * f5 + f * f4;
 }

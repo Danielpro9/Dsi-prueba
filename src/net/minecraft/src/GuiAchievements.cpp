@@ -52,6 +52,24 @@ void GuiAchievements::initGui()
 	controlList.push_back(new GuiSmallButton(1, width / 2 + 24, height / 2 + 74, 80, 20, StatCollector::translateToLocal("gui.done")));
 }
 
+void GuiAchievements::onGuiClosed()
+{
+#if PLATFORM_DSI
+	// Real-hardware evidence: with /achievement/bg.png (64KB) left resident
+	// after leaving this screen, the very next thing that needed VRAM --
+	// opening the inventory -- had only ~52KB of the 512KB texture budget
+	// left and failed ("GPU out of texture VRAM space"), falling back to
+	// the checkerboard placeholder. No GuiScreen on this codebase frees its
+	// own background texture on close (fine on platforms with real VRAM
+	// headroom), but DSi's 512KB budget has no room for a screen that is
+	// not even open anymore. Releasing it here just means the next visit to
+	// achievements decodes and uploads it again -- a real but rare cost,
+	// worth it against every other screen silently running short.
+	if (mc != nullptr && mc->renderEngine != nullptr)
+		mc->renderEngine->releaseTexture("/achievement/bg.png");
+#endif
+}
+
 void GuiAchievements::actionPerformed(GuiButton *guibutton)
 {
 	if (guibutton->id == 1)
