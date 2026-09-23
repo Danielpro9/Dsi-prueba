@@ -476,7 +476,7 @@ void EntityRenderer::updateLightmap()
                                                (static_cast<uint_t>(g) << 8) | static_cast<uint_t>(b));
     }
 
-#if defined(PS2_PLATFORM) || defined(DSI_PLATFORM)
+#if defined(PS2_PLATFORM) || (defined(DSI_PLATFORM) && PLATFORM_DSI_LIGHTMAP_ENABLED)
     // Real-hardware root cause found this round: RenderAPI_DSI.cpp's whole
     // "bake the lightmap into the per-vertex colour" scheme (see its own
     // long comment block -- built because this hardware has only one
