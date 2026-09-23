@@ -4,6 +4,7 @@
 
 #include "lwjgl/Display.h"
 #include "dsi/DsiEarlyInit.h"
+#include "dsi/system/DsiCrashHandler.h"
 
 #include <nds.h>
 
@@ -44,6 +45,14 @@ bool initialize()
 	}
 
 	MC_LOG_INFO("dsi", "save dir: %s\n", dsiGetSaveDir());
+
+	// debug.log is open as of dsiEnsureStorage() succeeding just above, so
+	// from here on a hardware exception (invalid memory access, most likely
+	// cause of a session that just stops with zero warning) gets its CPU
+	// state written to it instead of vanishing silently -- see
+	// DsiCrashHandler.cpp for the real-hardware log that motivated this.
+	dsiInstallCrashHandler();
+
 	MC_LOG_INFO("dsi", "starting display/render...\n");
 	lwjgl::Display::create();
 	return true;
