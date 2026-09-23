@@ -16,8 +16,31 @@ extern "C" {
 
 #ifndef __LITTLE_ENDIAN
 /* Sometimes it's necessary to define __LITTLE_ENDIAN explicitly
-   but these catch some common cases. */
-#if defined(i386) || defined(i486) || defined(__i386__) || defined(__x86_64__) || \
+   but these catch some common cases.
+   Real-hardware DSi symptom this fixes: this list never covered any ARM
+   macro (__arm__, __ARMEL__, ...), so a little-endian ARM target (the DSi's
+   ARM9, confirmed __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ by the real
+   toolchain) fell through to the #else branch below and used the
+   BIG-ENDIAN __HI()/__LO() word order on a genuinely little-endian double --
+   every fdlibm routine that splits a double into hi/lo 32-bit halves
+   (__ieee754_sqrt among them) read the wrong word. That produced exactly
+   the observed symptom: a real-hardware log showed __ieee754_sqrt(0.9604)
+   (i.e. sqrt_float(f*f+f1*f1) for f=0.98, f1=0.0 -- an entirely ordinary
+   movement input) returning NaN, reproducibly, for specific bit patterns,
+   while most other inputs happened to still work -- consistent with
+   scrambled bit-level arithmetic, not a logic bug in the game's own code or
+   memory corruption (every checkpoint upstream of this call, across many
+   rounds of real-hardware bisection, confirmed f/f1 arrive here finite and
+   ordinary). __BYTE_ORDER__/__ORDER_LITTLE_ENDIAN__ are standard GCC/Clang
+   predefines (confirmed present in the DSi toolchain) that describe the
+   actual target instead of an incomplete hardcoded name list, so checking
+   them first covers ARM -- and any other correctly-supported target -- for
+   free without touching the existing list's behaviour for platforms it
+   already got right (x86, MIPS little-endian; PowerPC/Wii correctly stays
+   on the big-endian branch either way). */
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define __LITTLE_ENDIAN
+#elif defined(i386) || defined(i486) || defined(__i386__) || defined(__x86_64__) || \
 	defined(intel) || defined(x86) || defined(i86pc) || \
 	defined(__alpha) || defined(__osf__) || defined(__MIPSEL__) || defined(__MIPSEL) || defined(__mipsel__) || defined(_MIPSEL)
 #define __LITTLE_ENDIAN
