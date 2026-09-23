@@ -138,20 +138,20 @@
 #undef  PLATFORM_SKIP_WORLD_PARTICLES
 #define PLATFORM_SKIP_WORLD_PARTICLES             1
 
-// Toggle for day/night/torch lighting (EntityRenderer.cpp's updateLightmap()
-// -> renderSetLightmapColors(), consumed per-vertex by RenderAPI_DSI.cpp's
-// drawInterleavedMesh()). Real-hardware testing before the
-// emitColorIfChanged() redundant-colour dedup showed frame rate collapsing
-// to an unstable ~2-6 FPS while exploring (down from ~7-8 FPS with lighting
-// off), bad enough that the touchscreen camera stopped feeling responsive.
-// Back on here to test whether that dedup optimization alone brings frame
-// rate back to an acceptable range on real hardware -- flip to 0 (as a
-// previous round of this file did) if it does not, without needing to
-// re-derive the EntityRenderer.cpp/RenderAPI_DSI.cpp wiring itself, which
-// stays in place either way. See EntityRenderer.cpp's
+// TEMPORARY, on request: day/night/torch lighting (EntityRenderer.cpp's
+// updateLightmap() -> renderSetLightmapColors(), consumed per-vertex by
+// RenderAPI_DSI.cpp's drawInterleavedMesh()) is real and correct, and the
+// worst of its GPU-FIFO cost is already cut by that file's
+// emitColorIfChanged() redundant-colour dedup -- but real-hardware testing
+// still showed frame rate collapsing to an unstable ~2-6 FPS while
+// exploring, bad enough that the touchscreen camera stopped feeling
+// responsive. Disabled here rather than reverting the wiring itself, so
+// turning it back on is flipping this one line once a further optimization
+// pass (greedy meshing, fewer draw calls, ...) brings the per-vertex cost
+// down enough to afford it -- see EntityRenderer.cpp's
 // `defined(PS2_PLATFORM) || (defined(DSI_PLATFORM) && PLATFORM_DSI_LIGHTMAP_ENABLED)`
 // guard, the only place this is read.
 #undef  PLATFORM_DSI_LIGHTMAP_ENABLED
-#define PLATFORM_DSI_LIGHTMAP_ENABLED              1
+#define PLATFORM_DSI_LIGHTMAP_ENABLED              0
 
 #endif // PLATFORM_DSI
