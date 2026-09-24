@@ -1479,6 +1479,55 @@ int_t RenderGlobal::renderSortedRenderers(int_t i, int_t j, int_t k, double d)
 				}
 			}
 
+			// Two earlier real-hardware logs (this diag's own distance stats, and
+			// the edit-mark diag in markRenderersInRange() below) both came back
+			// inconclusive: the edited block's own section gets correctly marked
+			// dirty, and drawn distances-to-section-CENTER look plausible (3-8
+			// blocks even for a section the player stands inside, since a section
+			// is a 16x16x16 cube). The user then confirmed the misplacement is
+			// PERMANENT, not a one-frame streaming lag: the block never appears
+			// at their feet, only ever far off. That rules out "just hasn't
+			// finished building yet" outright, and points at something more
+			// specific: is the WorldRenderer that actually CONTAINS the player's
+			// current position ever the one drawn? Earlier reasoning (setPosition()/
+			// setDontDraw() reset in-progress DSi builds cleanly on reposition, and
+			// orientCamera() only rotates + a tiny eye-height/near-plane translate,
+			// never double-translates by player position) didn't turn up a cause,
+			// so check directly instead of reasoning further: find the renderer
+			// whose box contains floor(playerX/Y/Z) and log whether it is actually
+			// present in renderBatchRenderers this frame, and if not, exactly which
+			// gate is rejecting it.
+			const int_t playerBlockX = MathHelper::floor_double(d1);
+			const int_t playerBlockY = MathHelper::floor_double(d2);
+			const int_t playerBlockZ = MathHelper::floor_double(d3);
+			WorldRenderer *containing = nullptr;
+			const int_t totalRenderersDiag = renderChunksWide * renderChunksTall * renderChunksDeep;
+			for (int_t idx = 0; idx < totalRenderersDiag; ++idx)
+			{
+				WorldRenderer *r = worldRenderers[idx];
+				if (r == nullptr)
+					continue;
+				if (playerBlockX >= r->posX && playerBlockX < r->posX + r->sizeWidth &&
+				    playerBlockY >= r->posY && playerBlockY < r->posY + r->sizeHeight &&
+				    playerBlockZ >= r->posZ && playerBlockZ < r->posZ + r->sizeDepth)
+				{
+					containing = r;
+					break;
+				}
+			}
+			bool containingDrawn = false;
+			if (containing != nullptr)
+			{
+				for (WorldRenderer *r : renderBatchRenderers)
+				{
+					if (r == containing)
+					{
+						containingDrawn = true;
+						break;
+					}
+				}
+			}
+
 			MC_LOG_INFO("dsi", "terrain diag: playerY=%.1f drawn=%d minDrawnDist=%.1f maxDrawnDist=%.1f"
 				" pending=%d pendingClose=%d pendingCloseInFrustum=%d minPendingDist=%.1f\n",
 				(double)d2, (int)renderBatchRenderers.size(),
@@ -1486,6 +1535,17 @@ int_t RenderGlobal::renderSortedRenderers(int_t i, int_t j, int_t k, double d)
 				(double)(maxDrawnSq >= 0.0f ? std::sqrt(maxDrawnSq) : -1.0f),
 				(int)worldRenderersToUpdate.size(), (int)pendingClose, (int)pendingCloseInFrustum,
 				(double)(minPendingSq >= 0.0f ? std::sqrt(minPendingSq) : -1.0f));
+			MC_LOG_INFO("dsi", "  containing section: found=%d origin=(%d,%d,%d) drawn=%d"
+				" needsUpdate=%d isInFrustum=%d hasPublishedTerrain=%d skipPass0=%d\n",
+				containing != nullptr ? 1 : 0,
+				containing != nullptr ? (int)containing->posX : 0,
+				containing != nullptr ? (int)containing->posY : 0,
+				containing != nullptr ? (int)containing->posZ : 0,
+				containingDrawn ? 1 : 0,
+				containing != nullptr ? (containing->needsUpdate ? 1 : 0) : -1,
+				containing != nullptr ? (containing->isInFrustum ? 1 : 0) : -1,
+				containing != nullptr ? (containing->hasPublishedTerrain() ? 1 : 0) : -1,
+				containing != nullptr ? (containing->skipRenderPass(0) ? 1 : 0) : -1);
 		}
 	}
 #endif
