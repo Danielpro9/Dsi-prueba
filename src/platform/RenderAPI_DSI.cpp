@@ -408,7 +408,34 @@ PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, i
 	if (!uploaded)
 		return PalettedUploadResult::SpaceExhausted;
 
-	glColorTableNtr(palette.size(), palette.data());
+	// Real-hardware investigation (still-open "no PNG has transparency" report,
+	// after ruling out every upload/bind/draw-time GPU state this file
+	// controls -- see the draw-time GFX_CONTROL/GFX_ALPHA_TEST diagnostic
+	// above): this return value used to be discarded. libnds's own
+	// glColorTableNtr() (videoGL.c) allocates from PALETTE VRAM -- banks E/F/G,
+	// a separate and much smaller budget than the 512KB texture-IMAGE budget
+	// (banks A-D) everything else in this file tracks -- and returns 0,
+	// silently leaving NO palette bound to this texture (GFX_PAL_FORMAT left
+	// at 0), if that separate budget is exhausted. Every other failure path
+	// in this file already falls through to a fallback; this one was
+	// reporting Success regardless, so a texture whose pixel DATA upload
+	// worked but whose PALETTE upload silently failed would draw with no
+	// colour lookup for any index -- including index 0, whose
+	// GL_TEXTURE_COLOR0_TRANSPARENT "clear" behaviour this whole mechanism
+	// depends on. Unlike the image-data VRAM above (SpaceExhausted, not
+	// worth retrying at a smaller quantShift -- a coarser quantization does
+	// not change that byte footprint), a coarser quantShift DOES shrink the
+	// palette's own footprint here, so this reports ColorOverflow instead:
+	// the same "retry at a coarser quantization" path already used when the
+	// palette does not fit in 256 entries applies just as well when it does
+	// not fit in palette VRAM. The warning below turns the next real-hardware
+	// log into a direct answer instead of another guess.
+	if (!glColorTableNtr(palette.size(), palette.data()))
+	{
+		MC_LOG_WARN("dsi", "paletted upload's colour table rejected: %dx%d, %u colours, palette VRAM (banks E/F/G) exhausted\n",
+			tex.width, tex.height, (unsigned)palette.size());
+		return PalettedUploadResult::ColorOverflow;
+	}
 	return PalettedUploadResult::Success;
 }
 
@@ -528,7 +555,16 @@ bool tryUploadWithStablePalette(int name, DsiTexture& tex, int param)
 	if (!uploaded)
 		return false;
 
-	glColorTableNtr(tex.stablePalette.size(), tex.stablePalette.data());
+	// See tryUploadPalettedAtDepth()'s identical check for why this return
+	// value matters: glColorTableNtr() can silently fail (palette VRAM,
+	// banks E/F/G, exhausted) while leaving the texture's pixel DATA upload
+	// above looking successful, previously reported as success regardless.
+	if (!glColorTableNtr(tex.stablePalette.size(), tex.stablePalette.data()))
+	{
+		MC_LOG_WARN("dsi", "stable-palette re-upload's colour table rejected: %dx%d, %u colours, palette VRAM (banks E/F/G) exhausted\n",
+			tex.width, tex.height, (unsigned)tex.stablePalette.size());
+		return false;
+	}
 	return true;
 }
 
