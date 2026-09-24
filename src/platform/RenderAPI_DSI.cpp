@@ -1178,17 +1178,26 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 	// caches also go through this same generic draw path but never set it, so
 	// this specifically catches the first actual block/terrain draw instead of
 	// whatever unrelated captured mesh happens to render first in a frame.
-	static bool s_dsiLoggedFirstTexturedDraw = false;
-	if (!s_dsiLoggedFirstTexturedDraw && mesh.hasTexture && mesh.hasBrightness && mesh.vertexCount > 0)
+	// Was one-shot (fired only on the very first qualifying draw). Widened to
+	// periodic: the enableLightmap()/disableLightmap() candidate fix this
+	// round restores most of their pre-investigation side effects (texture
+	// matrix touch, Texture2D toggle, colour reset) while still skipping the
+	// one confirmed-wrong step (rebinding a stray 16x16 lightmap texture over
+	// terrain.png). If ANYTHING later in a session still lets that -- or some
+	// other bind -- slip through onto terrain, a one-shot check at the very
+	// first draw would miss it entirely; this keeps watching for the whole
+	// session instead of trusting the first sample.
+	static unsigned int s_dsiTexturedDrawDiagTick = 0;
+	if (mesh.hasTexture && mesh.hasBrightness && mesh.vertexCount > 0 && (s_dsiTexturedDrawDiagTick++ % 180) == 0)
 	{
-		s_dsiLoggedFirstTexturedDraw = true;
 		float uvFirst[2] = { -1.0f, -1.0f };
 		std::memcpy(uvFirst, base + mesh.texCoordOffset, sizeof(uvFirst));
 		float uvLast[2] = { -1.0f, -1.0f };
 		if (mesh.vertexCount > 1)
 			std::memcpy(uvLast, base + (std::size_t)(mesh.vertexCount - 1) * mesh.stride + mesh.texCoordOffset, sizeof(uvLast));
 		const DsiTexture* boundTex = textureSlot(g_boundTexture);
-		MC_LOG_WARN("dsi", "first textured captured draw: boundTex=%d allocated=%d paletted=%d texW=%d texH=%d\n",
+		MC_LOG_WARN("dsi", "textured captured draw #%u: boundTex=%d allocated=%d paletted=%d texW=%d texH=%d\n",
+			s_dsiTexturedDrawDiagTick,
 			g_boundTexture,
 			boundTex ? (boundTex->allocated ? 1 : 0) : -1,
 			boundTex ? (boundTex->paletted ? 1 : 0) : -1,
@@ -1197,6 +1206,29 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 		MC_LOG_WARN("dsi", "  vertexCount=%d stride=%d texCoordOffset=%d firstUV=(%f,%f) lastUV=(%f,%f)\n",
 			mesh.vertexCount, mesh.stride, mesh.texCoordOffset,
 			(double)uvFirst[0], (double)uvFirst[1], (double)uvLast[0], (double)uvLast[1]);
+
+		// Read back the ACTUAL GPU modelview matrix at this exact draw call,
+		// via the engine's own renderGetMatrix() (glGetFixed(GL_GET_MATRIX_
+		// POSITION, ...) under the hood -- already wired up for other callers,
+		// see this file's renderGetMatrix()). Every CPU-side check this session
+		// (WorldRenderer's own posX/posY/posZ, needsUpdate, isInFrustum,
+		// hasPublishedTerrain) came back correct; this instead asks what
+		// translation the GPU is ACTUALLY about to draw this mesh with. In a
+		// standard affine 4x4 (row [0,0,0,1] last), the translation lives in
+		// elements 12/13/14 regardless of row- or column-major storage, since
+		// that is the only place a translate-only component can appear for a
+		// matrix built by composing rotations with glTranslatef calls. If
+		// RenderList::render()'s (originX - viewerX) + drawCapturedTerrain()'s
+		// posXClip translate really do net out to "sectionX - viewerX" as read
+		// from the code, these three numbers should be small (within the
+		// section's own ~16-block size) whenever the section being drawn is
+		// the one right around the player -- if they are instead huge, that is
+		// direct, undeniable proof the GPU-side translate is wrong even though
+		// every CPU-side flag says it should not be.
+		float mv[16];
+		renderGetMatrix(RenderMatrixQuery::ModelView, mv);
+		MC_LOG_WARN("dsi", "  gpu modelview translate=(%f,%f,%f)\n",
+			(double)mv[12], (double)mv[13], (double)mv[14]);
 	}
 
 	// Same translucency approximation as drawInterleavedMesh() -- see its

@@ -535,6 +535,16 @@ void EntityRenderer::updateLightmap()
 #endif
 }
 
+// DSi note (see enableLightmap()'s own DSi branch below for the full real-
+// hardware evidence chain): this function's shape is unconditional again
+// for every platform including DSi, same as before this session's
+// investigation started. A/B tested on real hardware: making this a DSi
+// no-op (this platform's earlier fix) solved the confirmed "blocks have no
+// texture" bug but reintroduced a different, confirmed one -- terrain
+// renders correctly textured/shaded but displaced far from the player,
+// permanently. Reverting to run this unconditionally made that displacement
+// go away, so it stays unconditional while the specific side effect
+// responsible gets isolated.
 void EntityRenderer::disableLightmap(double)
 {
     OpenGlHelper::setActiveTexture(OpenGlHelper::lightmapTexUnit);
@@ -546,6 +556,31 @@ void EntityRenderer::enableLightmap(double)
 {
 #if defined(PS2_PLATFORM)
     OpenGlHelper::setActiveTexture(OpenGlHelper::lightmapTexUnit);
+    renderEnable(RenderCapability::Texture2D);
+    OpenGlHelper::setActiveTexture(OpenGlHelper::defaultTexUnit);
+#elif defined(DSI_PLATFORM)
+    // See disableLightmap()'s own DSi comment above for the real-hardware
+    // evidence this candidate responds to. Every side effect the original
+    // non-PS2 branch below had is restored EXCEPT:
+    //   - mc->renderEngine->bindTexture(lightmapTexture): confirmed wrong,
+    //     this is what silently replaced terrain.png with a 16x16 texture
+    //     every pass, the session's original "blocks have no texture" bug.
+    //   - renderTextureParameters(true, false, true): reads and writes
+    //     g_boundTexture's OWN blur/clamp fields. In the original code this
+    //     ran right after the bind above, so it configured the LIGHTMAP
+    //     texture's sampling mode. With that bind skipped, g_boundTexture
+    //     is still whatever renderTerrainBeginPass() bound (terrain.png),
+    //     so calling this here would silently force terrain.png into the
+    //     lightmap's clamp+blur settings instead -- a different, new bug.
+    if (lightmapTexture < 0)
+        return;
+    OpenGlHelper::setActiveTexture(OpenGlHelper::lightmapTexUnit);
+    renderMatrixMode(RenderMatrixMode::Texture);
+    renderLoadIdentity();
+    renderScale(0.00390625f, 0.00390625f, 0.00390625f);
+    renderTranslate(8.0f, 8.0f, 8.0f);
+    renderMatrixMode(RenderMatrixMode::ModelView);
+    renderColor4f(1.0f, 1.0f, 1.0f, 1.0f);
     renderEnable(RenderCapability::Texture2D);
     OpenGlHelper::setActiveTexture(OpenGlHelper::defaultTexUnit);
 #else
