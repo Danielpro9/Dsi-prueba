@@ -64,6 +64,34 @@ static bool isTileAtlasResource(const std::string &name)
 	return path == "/terrain.png" || path == "/gui/items.png";
 }
 
+#if PLATFORM_DSI
+// Real-hardware evidence (two screenshots, same session): gui/items.png --
+// forced onto the real-alpha RGBA path below by isTileAtlasResource() --
+// shows correctly transparent item icons. gui/icons.png (crosshair, hearts,
+// XP bar) and item/xporb.png (the XP orb entity) are NOT tile atlases, so
+// they default to the paletted GL_RGB256 + GL_TEXTURE_COLOR0_TRANSPARENT
+// path (RenderAPI_DSI.cpp's uploadTexture()) instead -- and both show a
+// solid black box exactly where the transparent background should be,
+// reported and photographed after every other checkable piece of that
+// mechanism (the COLOR0_TRANSPARENT bit reaching glTexParameter(), the
+// palette upload succeeding, transparent source pixels correctly mapped to
+// palette index 0) was individually confirmed correct. Whatever the exact
+// reason, paletted index-0 transparency is not actually working on this
+// hardware/libnds combination, while the RGBA path's real per-texel alpha
+// bit (convertRgba8ToDs()) demonstrably does. Rather than keep chasing the
+// paletted mechanism, route the few small textures confirmed to need crisp
+// transparency onto the path already proven to work -- same trick
+// isTileAtlasResource() already uses for items.png, just for a different
+// reason (there it was palette-colour-count pressure on a 256x256 atlas;
+// here it is this transparency bug on much smaller textures, cheap to
+// upload uncompressed either way).
+static bool dsiNeedsRealAlphaTransparency(const std::string &name)
+{
+	const std::string path = normalizedTexturePath(name);
+	return path == "/gui/icons.png" || path == "/item/xporb.png";
+}
+#endif
+
 static bool shouldCacheDecodedTexturePixels(const std::string &name)
 {
 #if PLATFORM_BOUNDED_DECODED_TEXTURE_CACHE
@@ -523,7 +551,8 @@ bool RenderEngine::loadTextureStreamInto(const std::string &s, int_t texture, st
 		// picks the CHEAPER RGB5A3 format for terrain -- see setupTexture()'s own
 		// comment below -- so defaulting it on there would be a regression, not
 		// a fix).
-		setupTexture(uploadImage, texture, isTileAtlasResource(s), isTerrainAlphaFixResource(s), isTileAtlasResource(s));
+		setupTexture(uploadImage, texture, isTileAtlasResource(s), isTerrainAlphaFixResource(s),
+			isTileAtlasResource(s) || dsiNeedsRealAlphaTransparency(s));
 #else
 		setupTexture(uploadImage, texture, isTileAtlasResource(s), isTerrainAlphaFixResource(s));
 #endif
