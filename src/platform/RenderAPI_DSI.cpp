@@ -1469,6 +1469,38 @@ void renderTextureSubImageRgba(int level, int x, int y, int width, int height, c
 		std::uint8_t* dstRow = tex->rgba.data() + ((std::size_t)(y + row) * tex->width + x) * 4;
 		std::memcpy(dstRow, srcRow, (std::size_t)width * 4);
 	}
+
+	// Real-hardware evidence (the vram= diagnostic added alongside this):
+	// once VRAM pressure first forces a forceHighPrecision texture
+	// (terrain.png) onto the paletted fallback, it never gets room back --
+	// "high-precision upload failed for 256x256... vram=484/512KB" fired on
+	// every single tick's water/lava/fire animation patch for the rest of a
+	// whole session, hundreds of times in a row, the number never moving.
+	// uploadTexture() tries the RGBA path first unconditionally for a
+	// forceHighPrecision texture on every call regardless of whether the
+	// exact same attempt failed a tick ago -- a wasted, doomed
+	// glTexImage2D() call every tick with zero chance of succeeding while
+	// nothing frees VRAM in between, before falling through to the exact
+	// same tryUploadPaletted() call this reaches directly below anyway.
+	// Skip straight to it once a texture is already resident as paletted: a
+	// full reload (renderTextureImageRgba() -- a texture pack switch, the
+	// resource's first load) still gets a fresh RGBA attempt from scratch,
+	// this only stops a patch from re-litigating a fit that just failed a
+	// moment ago for no reason it would not fail again this moment too.
+	if (tex->paletted)
+	{
+		int param = 0;
+		if (!tex->clamp)
+			param |= GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T;
+		// forceRebuild=false: reuses tex's already-established stable
+		// palette (tryUploadWithStablePalette()) instead of re-deriving it
+		// from this patch alone -- same reasoning uploadTexture()'s own
+		// call below already documented, just reached without the doomed
+		// RGBA attempt in front of it.
+		tex->allocated = tryUploadPaletted(g_boundTexture, *tex, param, false);
+		return;
+	}
+
 	// Same dimensions as the already-successful initial upload, so this can't
 	// newly fail the power-of-two check -- but propagate honestly anyway
 	// rather than assume, in case VRAM pressure is what fails it this time.

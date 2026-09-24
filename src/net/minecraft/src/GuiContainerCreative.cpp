@@ -163,6 +163,38 @@ void GuiContainerCreative::handleMouseInput()
     container->scrollTo(currentScroll);
 }
 
+void GuiContainerCreative::onGuiClosed()
+{
+    GuiContainer::onGuiClosed();
+
+#if PLATFORM_DSI
+    // Real-hardware evidence (the vram= diagnostic added this round): a
+    // session's resident-texture dump, taken while just exploring an
+    // ordinary overworld far from any end portal, still showed
+    // '/misc/tunnel.png' and '/misc/particlefield.png' resident -- the two
+    // textures renderEndPortalGuiIcon() (RenderItem.cpp) uses to draw the
+    // End Portal block's animated-swirl ITEM ICON, needed only because this
+    // screen renders every placeable block's icon, including that one, in
+    // its scrollable grid. Nothing in normal gameplay (not being near a
+    // real end portal) ever touches them again, but nothing ever released
+    // them either -- once loaded here, they sat in the 512KB texture-image
+    // budget for the rest of the session. That log also caught
+    // terrain.png's own real-quality (non-paletted) upload failing for
+    // want of exactly the kind of room these two textures (plus this
+    // screen's own '/gui/allitems.png') were quietly still holding:
+    // releasing all three here, the same pattern
+    // ClientPlatformPolicy_DSI.cpp's releaseWorldEntryAssets() already uses
+    // for menu-only textures, gives that budget the best real chance it can
+    // get without this screen ever having been opened at all.
+    if (mc != nullptr && mc->renderEngine != nullptr)
+    {
+        mc->renderEngine->releaseTexture("/gui/allitems.png");
+        mc->renderEngine->releaseTexture("/misc/tunnel.png");
+        mc->renderEngine->releaseTexture("/misc/particlefield.png");
+    }
+#endif
+}
+
 Slot *GuiContainerCreative::getControllerNavigationTarget(Slot *selected, int_t dirX, int_t dirY)
 {
 #if PLATFORM_PS2 || PLATFORM_WII || PLATFORM_DSI

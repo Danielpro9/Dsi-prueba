@@ -15,6 +15,7 @@ public:
     void initGui() override;
     void handleMouseInput() override;
     void drawScreen(int_t mouseX, int_t mouseY, float_t partialTick) override;
+    void onGuiClosed() override;
     Slot *getControllerNavigationTarget(Slot *selected, int_t dirX, int_t dirY) override;
 
     static InventoryBasic *getInventory();
