@@ -778,6 +778,31 @@ void GuiIngame::renderGameOverlay(float_t partialTick, bool showDebug, int_t mou
 #if PLATFORM_PROFILE_RENDER_PHASES
 	const std::uint32_t cycHudItems = platformProfileRenderPhaseBegin();
 #endif
+#if PLATFORM_GUI_FORCE_DEPTH_DISABLED
+	// Real-hardware evidence (reported since the earliest builds: hotbar item
+	// icons stay visible over EVERYTHING drawn afterward, including the pause
+	// menu and the creative inventory) -- GuiContainer::drawScreen() already
+	// brackets its own 3D item-icon draws with exactly this (see its own
+	// identical comment), but this hotbar loop never did. DepthTest enters
+	// this function in whatever state the world/HUD rendering just before it
+	// left -- effectively always enabled, since terrain rendering depends on
+	// it -- so these icons draw WITH depth test on and WRITE real depth
+	// values, then leave it enabled afterward. RenderAPI_DSI.cpp's
+	// renderClear() is a confirmed no-op on this backend (the DS 3D engine
+	// only clears once per hardware frame, at the next glFlush(), not on
+	// demand mid-frame the way EntityRenderer.cpp's renderClear(Depth) call
+	// before drawing the current screen assumes) -- so those leftover depth
+	// values, and DepthTest still being on, both carry straight into
+	// whatever screen draws next in the same frame. A screen's own item icon
+	// redrawn at the same position can then fail the depth test against the
+	// hotbar's own already-written value and get silently skipped, leaving
+	// the hotbar's icon visible through it. Bracketing this loop the same
+	// way GuiContainer.cpp already does removes both the stray depth writes
+	// and the leaked enabled state.
+	renderEnable(RenderCapability::DepthTest);
+	renderDepthMask(true);
+	renderDepthFunc(RenderCompare::LessEqual);
+#endif
 	RenderHelper::enableGUIStandardItemLighting();
 	for (int_t l1 = 0; l1 < 9; l1++)
 	{
@@ -786,6 +811,9 @@ void GuiIngame::renderGameOverlay(float_t partialTick, bool showDebug, int_t mou
 		renderInventorySlot(l1, ix, iy, partialTick);
 	}
 	RenderHelper::disableStandardItemLighting();
+#if PLATFORM_GUI_FORCE_DEPTH_DISABLED
+	renderDisable(RenderCapability::DepthTest);
+#endif
 #if PLATFORM_PROFILE_RENDER_PHASES
 	platformProfileRenderPhaseEnd(cycHudItems, PlatformRenderPhase::HudItems);
 #endif

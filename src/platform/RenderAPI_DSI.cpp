@@ -1903,6 +1903,23 @@ void renderClear(unsigned int mask)
 	// glFlush(). Reject nothing: a caller clearing only Depth or only Color on
 	// this hardware still gets both, which is a behavior difference worth
 	// knowing about once something visible needs just one of them cleared.
+	//
+	// CONFIRMED real-hardware consequence (traced this round): EntityRenderer.cpp
+	// calls renderClear(Depth) between drawing the world/HUD and drawing the
+	// current GuiScreen, on every other backend genuinely resetting the depth
+	// buffer there so the screen is never occluded by that same frame's 3D
+	// geometry. On this backend that call does nothing -- the whole frame's
+	// world+HUD+screen geometry shares ONE depth buffer pass, cleared only
+	// once, at the next glFlush(). Anything drawn earlier in the frame with
+	// depth test on and left enabled (GuiIngame.cpp's hotbar item icons were
+	// exactly this, fixed separately by bracketing them like GuiContainer.cpp
+	// already does) leaves real depth values in place for the rest of the
+	// frame, which can make a screen's own same-position redraw silently fail
+	// the depth test and never appear. There is no cheap mid-frame "clear
+	// now" on this GPU (the rear-plane/clear values apply once, at frame
+	// start) -- a real fix would need a manual full-viewport depth-only quad
+	// draw here (write depth, disable colour write) instead of trusting this
+	// no-op, if another case of the same symptom turns up.
 	(void)mask;
 }
 
