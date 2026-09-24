@@ -37,9 +37,22 @@ int_t LegacyUiTexture::resolve(RenderEngine *engine)
     if (!resourceAvailable)
         return -1;
 
-    if (texture >= 0 && renderTextureIsValid(texture))
-        return texture;
-
+    // Real-hardware evidence (same bug traced through LegacyUiAssets.cpp's
+    // title-texture cache, which this class's caching predates): reusing a
+    // once-resolved GL texture NAME across calls goes stale the moment
+    // anything releases that resource's texture (ClientPlatformPolicy_DSI.cpp's
+    // releaseWorldEntryAssets() does exactly this for every path this class is
+    // ever constructed with -- scroll_down.png/tick.png/tickbox.png/
+    // tickbox_hovered.png -- right before a world loads, to free VRAM).
+    // renderTextureIsValid() only reports whether that NAME is currently
+    // allocated to *something*, not whether it still holds this resource's
+    // data; libnds hands freed names back out to the next texture allocated
+    // (in practice: the player's skin, downloaded once gameplay starts), so a
+    // cached name surviving a release can end up silently bound to unrelated
+    // image data once the menu is shown again. RenderEngine::getTexture()
+    // already caches by resource path in its own textureMap, correctly
+    // invalidated by releaseTexture() -- deferring to it here every call
+    // removes the second, unsafe cache instead of trying to keep both in sync.
     const int_t resolved = engine->getTexture(path);
     if (!renderTextureIsValid(resolved))
         return -1;

@@ -85,8 +85,44 @@ void applyPolyFormatIfDirty()
 	g_poly.dirty = false;
 
 	u32 bits = POLY_ALPHA(g_poly.alpha31);
-	if (g_poly.shade == RenderShadeModel::Flat)
-		bits |= POLY_DECAL; // Closest DS shading mode to "no interpolation".
+	// g_poly.shade is intentionally NOT translated into POLY_DECAL/POLY_MODULATION
+	// here (an earlier version of this function did, believing POLY_DECAL was
+	// "the closest DS shading mode to no interpolation"). That mapping was wrong
+	// on two counts, and real-hardware evidence (reported: solid black boxes
+	// behind every menu/dialog text glyph, and a general loss of PNG
+	// transparency across the game) traced back to it:
+	//   1. POLY_DECAL/POLY_MODULATION (POLYGON_ATTR bits 4-5, libnds's own
+	//      comment literally calls the enum "shading" but it is the texture
+	//      COMBINER mode -- how texture colour and vertex colour combine --
+	//      not a Gouraud/flat vertex-colour-interpolation toggle. The DS 3D
+	//      engine has no such toggle: vertex colours are always hardware-
+	//      interpolated across a polygon, so there is nothing here for
+	//      RenderShadeModel::Flat to correctly map onto.
+	//   2. Decal mode's actual effect on a texture's "transparent" texels
+	//      (alpha 0, e.g. GL_TEXTURE_COLOR0_TRANSPARENT's index 0, used by
+	//      every paletted texture including font/default.png and font/
+	//      alternate.png) is the opposite of transparent: in Decal mode, a
+	//      texel with TexAlpha == 0 outputs FinalColor = VertexColor and
+	//      FinalAlpha = VertexAlpha (the polygon's OWN alpha, opaque for
+	//      ordinary text/UI draws) instead of Modulation mode's FinalAlpha =
+	//      VertexAlpha * TexAlpha == 0. So every "transparent" pixel of a
+	//      glyph's quad rendered fully OPAQUE, painted in whatever colour the
+	//      draw's vertex colour happened to be -- for FontRenderer's drop-
+	//      shadow pass that colour is near-black, which is exactly the
+	//      reported "solid black box behind every character" (offset by the
+	//      shadow pass's +1,+1 px, sized to each glyph's own quad). Gui::
+	//      drawGradientRect (the menu/dialog darken overlay almost every
+	//      screen draws before its own text/widgets) leaves shade set to
+	//      Flat as its own post-draw state restore, so this was live for
+	//      most GUI text and, by the same mechanism, for every other
+	//      textured draw made while RenderGlobal.cpp/EntityRenderer.cpp/
+	//      RenderHelper.cpp/TileEntityRendererPiston.cpp's own Flat/Smooth
+	//      toggling left shade on Flat -- matching the broader "all PNG
+	//      textures lack transparency" report too. Leaving this bit
+	//      permanently unset (always POLY_MODULATION, value 0, the correct
+	//      default for every textured draw in this engine) fixes both;
+	//      renderShadeModel() below stays a real state setter (other
+	//      platforms need it) but g_poly.shade no longer feeds glPolyFmt().
 	if (g_poly.light0)
 		bits |= POLY_FORMAT_LIGHT0;
 	if (g_poly.light1)
