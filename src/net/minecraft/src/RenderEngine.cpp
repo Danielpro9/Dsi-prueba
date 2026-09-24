@@ -880,16 +880,29 @@ int_t RenderEngine::getTexture(const std::string &s)
 			}
 		}
 		setupTexture(missingTextureImage.get(), texture, isTileAtlasResource(s), isTerrainAlphaFixResource(s));
-		if (renderTextureIsValid(texture))
-		{
-			textureMap[s] = texture;
-			failedTextures[s] = TEXTURE_RETRY_INTERVAL;
-			return texture;
-		}
-#endif
+		// Cache regardless of whether even the checkerboard fallback fit.
+		// Real-hardware evidence (a debug.log showing this exact texture id
+		// re-logged hundreds of times inside a couple of seconds, frame rate
+		// down to 0-1 FPS the whole time): VRAM pressure severe enough to
+		// reject a 64x64 checkerboard means the full attempt above -- SD
+		// decode plus a multi-shift quantization retry loop -- is guaranteed
+		// to fail identically next time too, but without caching here that
+		// full attempt is exactly what re-ran on every single subsequent
+		// getTexture() call for this name, forever: the only backoff this
+		// file has (the retry-countdown branch further up, and
+		// DSI_TEXTURE_MAX_RETRIES beyond it) is reached by looking this name
+		// up in textureMap first, which never happened on this path. Caching
+		// even an invalid/dangling id costs nothing worse than what every
+		// call site already tolerates with no validity check of its own (see
+		// this function's own comment above on that).
+		textureMap[s] = texture;
+		failedTextures[s] = TEXTURE_RETRY_INTERVAL;
+		return texture;
+#else
 		int_t name = texture;
 		renderDeleteTextures(1, &name);
 		return texture;
+#endif
 	}
 	textureMap[s] = texture;
 	if (!loaded)
