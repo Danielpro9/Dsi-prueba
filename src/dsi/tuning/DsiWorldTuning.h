@@ -118,6 +118,25 @@
 #undef  PLATFORM_INCREMENTAL_CHUNK_SAVE_LIMIT
 #define PLATFORM_INCREMENTAL_CHUNK_SAVE_LIMIT    2
 
+// Real-hardware evidence (reported: 80-190ms "worldTick" spikes, worst right
+// after a burst of chunks streams in): World::TickUpdates() drains its
+// scheduledTickTreeSet (fluid spread, leaf decay, redstone, crop growth) in
+// one synchronous call, capped only at vanilla's own 1000 entries with no
+// time bound beyond that count -- see Ps2WorldTuning.h's
+// PS2_MAX_SCHEDULED_TICK_UPDATES for the full explanation, kept at vanilla's
+// 1000 there since PS2 has real headroom for it. A newly streamed-in DSi
+// chunk with active water/lava/crops can schedule far more than this
+// console's own per-tick budget can absorb in one call, all due the same
+// world tick. 100 is a first estimate (a tenth of vanilla's cap, the same
+// conservative-first-measurement shape as PS2_RANDOM_TICK_CHUNKS_PER_TICK's
+// own round-robin fix for the analogous updateBlocksAndPlayCaveSounds spike)
+// -- not yet measured against a real chunk-load-heavy session; the backlog
+// simply continues over more world ticks rather than being dropped, so this
+// trades tick-processing latency (fluids/redstone catching up a few ticks
+// later under heavy load) for removing the synchronous stall.
+#undef  PLATFORM_MAX_SCHEDULED_TICK_UPDATES
+#define PLATFORM_MAX_SCHEDULED_TICK_UPDATES      100
+
 // Ambient world particles (torch flame, lava drip, portal sparkle, ...):
 // World::randomDisplayUpdates() probes PLATFORM_RANDOM_DISPLAY_PROBES nearby
 // block positions every tick (6 RNG draws + a block lookup each) purely to

@@ -345,8 +345,13 @@ bool WorldRenderer::dsiBuildRendererStep(int_t blockBudget)
 			// see dsiRepackCapturedMeshFast()'s own comment for the full why.
 			// Safe to call even though the mesh isn't published to
 			// dsiLiveMesh yet (see the comment above): it only touches
-			// dsiStagingMesh's own captured buffer, in place.
-			dsiRepackCapturedMeshFast(dsiStagingMesh[dsiBuildPass].captured);
+			// dsiStagingMesh's own captured buffer, in place. Passing
+			// terrain.png's own texture id is what lets it also pre-convert
+			// texcoords, not just position -- safe specifically for this
+			// mesh because drawCapturedTerrain() never rebinds a texture
+			// itself (see renderExtraTerrainMeshes()'s own "state assumes
+			// terrain.png is still bound" comment below for why that holds).
+			dsiRepackCapturedMeshFast(dsiStagingMesh[dsiBuildPass].captured, ConnectedTextures::getTerrainTextureId());
 		}
 		else
 		{

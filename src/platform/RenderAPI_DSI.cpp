@@ -222,6 +222,25 @@ struct DsiTexture
 	// established yet, next upload must do a full (re)build".
 	std::vector<std::uint16_t> stablePalette;
 	int stableQuantShift = -1;
+
+	// Real-hardware evidence (investigated this round: reported frame-time
+	// spikes tracking chunk-heavy exploration): renderTextureSubImageRgba()
+	// used to re-upload this texture's ENTIRE pixel data to the GPU on every
+	// single call -- unavoidable on this hardware (glTexImageNtr2D() has no
+	// partial upload; see that function's own comment), but
+	// RenderEngine.cpp's updateDynamicTextures() calls it once per animated
+	// TextureFX targeting this texture (lava/water/fire/portal can all patch
+	// terrain.png in the same tick), each a full re-conversion (RGBA555 or
+	// the palette-quantization scan) and DMA of up to 128KB, when at most one
+	// upload is ever needed to show the tick's final combined state. This
+	// flag defers that expensive re-upload: the cheap part (patching the CPU
+	// shadow copy in tex.rgba) still happens immediately in
+	// renderTextureSubImageRgba(), but the actual GPU upload is done once,
+	// lazily, the next time this texture is actually bound for real drawing
+	// (renderBindTexture() below) -- by then every patch this tick already
+	// landed in the shadow copy, so one upload there shows the same final
+	// pixels N separate uploads would have, for a fraction of the cost.
+	bool pendingUploadFlush = false;
 };
 
 // How many bytes of the four 128 KB texture-image banks (DsiEarlyVideo.cpp)
@@ -251,6 +270,12 @@ DsiTexture* textureSlot(int name)
 		g_textures.resize(name + 1);
 	return &g_textures[name];
 }
+
+// Defined below, near renderTextureSubImageRgba() (the deferred-upload
+// mechanism it belongs to); forward-declared here so renderBindTexture()
+// above that point in the file can call it. See DsiTexture::
+// pendingUploadFlush's comment for why this exists.
+void dsiFlushPendingUpload(int name, DsiTexture& tex);
 
 // RGBA8 -> DS GL_RGBA (15-bit direct colour, 1-bit alpha). Bit layout VERIFIED
 // against nds/arm9/video.h's ARGB16() macro: bit15=alpha, bits0-4=R, 5-9=G,
@@ -408,7 +433,40 @@ PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, i
 	if (!uploaded)
 		return PalettedUploadResult::SpaceExhausted;
 
-	glColorTableNtr(palette.size(), palette.data());
+	// Real-hardware investigation (still-open "no PNG has transparency" report,
+	// after ruling out every upload/bind/draw-time GPU state this file
+	// controls -- see the draw-time GFX_CONTROL/GFX_ALPHA_TEST diagnostic
+	// above): this return value used to be discarded. libnds's own
+	// glColorTableNtr() (videoGL.c) allocates from PALETTE VRAM -- banks E/F/G,
+	// a separate and much smaller budget than the 512KB texture-IMAGE budget
+	// (banks A-D) everything else in this file tracks -- and returns 0,
+	// silently leaving NO palette bound to this texture (GFX_PAL_FORMAT left
+	// at 0), if that separate budget is exhausted. Every other failure path
+	// in this file already falls through to a fallback; this one was
+	// reporting Success regardless, so a texture whose pixel DATA upload
+	// worked but whose PALETTE upload silently failed would draw with no
+	// colour lookup for any index -- including index 0, whose
+	// GL_TEXTURE_COLOR0_TRANSPARENT "clear" behaviour this whole mechanism
+	// depends on. Unlike the image-data VRAM above (SpaceExhausted, not
+	// worth retrying at a smaller quantShift -- a coarser quantization does
+	// not change that byte footprint), a coarser quantShift DOES shrink the
+	// palette's own footprint here, so this reports ColorOverflow instead:
+	// the same "retry at a coarser quantization" path already used when the
+	// palette does not fit in 256 entries applies just as well when it does
+	// not fit in palette VRAM. The warning below turns the next real-hardware
+	// log into a direct answer instead of another guess.
+	//
+	// NOTE: this exact check was accidentally reverted by a later commit in
+	// the same round that meant only to remove two unrelated diagnostics
+	// (git history: added in one commit, silently dropped by the next one's
+	// edit, restored here) -- keeping this note so that mistake is visible
+	// in the code itself, not just buried in commit history.
+	if (!glColorTableNtr(palette.size(), palette.data()))
+	{
+		MC_LOG_WARN("dsi", "paletted upload's colour table rejected: %dx%d, %u colours, palette VRAM (banks E/F/G) exhausted\n",
+			tex.width, tex.height, (unsigned)palette.size());
+		return PalettedUploadResult::ColorOverflow;
+	}
 	return PalettedUploadResult::Success;
 }
 
@@ -528,7 +586,18 @@ bool tryUploadWithStablePalette(int name, DsiTexture& tex, int param)
 	if (!uploaded)
 		return false;
 
-	glColorTableNtr(tex.stablePalette.size(), tex.stablePalette.data());
+	// See tryUploadPalettedAtDepth()'s identical check (and its note on this
+	// exact fix having been accidentally reverted once already) for why this
+	// return value matters: glColorTableNtr() can silently fail (palette
+	// VRAM, banks E/F/G, exhausted) while leaving the texture's pixel DATA
+	// upload above looking successful, previously reported as success
+	// regardless.
+	if (!glColorTableNtr(tex.stablePalette.size(), tex.stablePalette.data()))
+	{
+		MC_LOG_WARN("dsi", "stable-palette re-upload's colour table rejected: %dx%d, %u colours, palette VRAM (banks E/F/G) exhausted\n",
+			tex.width, tex.height, (unsigned)tex.stablePalette.size());
+		return false;
+	}
 	return true;
 }
 
@@ -1222,25 +1291,57 @@ bool renderCaptureInterleaved(const RenderInterleavedMesh& mesh, RenderCapturedM
 // per vertex) -- a real but smaller remaining cost than position (1 call vs.
 // 3 per vertex) and the next thing to revisit if a texture-size-aware
 // version of this is worth the added complexity.
-void dsiRepackCapturedMeshFast(RenderCapturedMesh& mesh)
+void dsiRepackCapturedMeshFast(RenderCapturedMesh& mesh, int terrainTextureId)
 {
-	if (mesh.empty() || mesh.positionIsV16)
+	if (mesh.empty())
 		return;
 
 	std::uint8_t* raw = reinterpret_cast<std::uint8_t*>(mesh.raw.data());
-	for (int i = 0; i < mesh.vertexCount; ++i)
+
+	if (!mesh.positionIsV16)
 	{
-		std::uint8_t* vertex = raw + (std::size_t)i * mesh.stride;
-		float position[3];
-		std::memcpy(position, vertex, sizeof(position));
-		const std::int32_t posV16[3] = {
-			floattov16(position[0] * kInvVertexScale),
-			floattov16(position[1] * kInvVertexScale),
-			floattov16(position[2] * kInvVertexScale),
-		};
-		std::memcpy(vertex, posV16, sizeof(posV16));
+		for (int i = 0; i < mesh.vertexCount; ++i)
+		{
+			std::uint8_t* vertex = raw + (std::size_t)i * mesh.stride;
+			float position[3];
+			std::memcpy(position, vertex, sizeof(position));
+			const std::int32_t posV16[3] = {
+				floattov16(position[0] * kInvVertexScale),
+				floattov16(position[1] * kInvVertexScale),
+				floattov16(position[2] * kInvVertexScale),
+			};
+			std::memcpy(vertex, posV16, sizeof(posV16));
+		}
+		mesh.positionIsV16 = true;
 	}
-	mesh.positionIsV16 = true;
+
+	// See RenderCapturedMesh::texCoordIsT16's own comment: this is only safe
+	// because the caller already confirmed this mesh is always drawn against
+	// terrainTextureId specifically. Guarded on the texture actually being
+	// resident (width/height known) -- normally always true by the time a
+	// section finishes building, but failing safe (leaving the float path in
+	// place) rather than baking in a bogus 0x0 scale is worth the one check.
+	if (mesh.hasTexture && !mesh.texCoordIsT16)
+	{
+		const DsiTexture* terrainTex = textureSlot(terrainTextureId);
+		if (terrainTex && terrainTex->allocated && terrainTex->width > 0 && terrainTex->height > 0)
+		{
+			const float texW = static_cast<float>(terrainTex->width);
+			const float texH = static_cast<float>(terrainTex->height);
+			for (int i = 0; i < mesh.vertexCount; ++i)
+			{
+				std::uint8_t* vertex = raw + (std::size_t)i * mesh.stride;
+				float uv[2];
+				std::memcpy(uv, vertex + mesh.texCoordOffset, sizeof(uv));
+				const std::int32_t uvT16[2] = {
+					floattot16(uv[0] * texW),
+					floattot16(uv[1] * texH),
+				};
+				std::memcpy(vertex + mesh.texCoordOffset, uvT16, sizeof(uvT16));
+			}
+			mesh.texCoordIsT16 = true;
+		}
+	}
 }
 
 namespace
@@ -1320,6 +1421,7 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 	};
 
 	const bool positionIsV16 = mesh.positionIsV16;
+	const bool texCoordIsT16 = mesh.texCoordIsT16;
 
 	glBegin(glPrimitive);
 	for (int i = 0; i < mesh.vertexCount; ++i)
@@ -1362,9 +1464,18 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 		}
 		if (mesh.hasTexture)
 		{
-			float uv[2];
-			std::memcpy(uv, vertex + mesh.texCoordOffset, sizeof(uv));
-			glTexCoord2f(uv[0], uv[1]);
+			if (texCoordIsT16)
+			{
+				std::int32_t uvT16[2];
+				std::memcpy(uvT16, vertex + mesh.texCoordOffset, sizeof(uvT16));
+				glTexCoord2t16(static_cast<t16>(uvT16[0]), static_cast<t16>(uvT16[1]));
+			}
+			else
+			{
+				float uv[2];
+				std::memcpy(uv, vertex + mesh.texCoordOffset, sizeof(uv));
+				glTexCoord2f(uv[0], uv[1]);
+			}
 		}
 
 		if (positionIsV16)
@@ -1488,6 +1599,22 @@ void renderBindTexture(int texture)
 	g_boundTexture = texture;
 	if (texture > 0)
 		glBindTexture(0, texture);
+
+	// See DsiTexture::pendingUploadFlush's comment: a sub-image patch
+	// (renderTextureSubImageRgba() above) only updates the CPU-side shadow
+	// copy and marks this flag, deferring the real GPU re-upload to here --
+	// the next time this exact texture is actually bound for drawing, which
+	// naturally coalesces every patch a tick made into the one re-upload
+	// that is ever visibly needed, and skips the re-upload entirely on a
+	// tick where the patched texture (e.g. gui/items.png, only relevant
+	// while an inventory-style screen is open) is never bound for drawing
+	// at all.
+	DsiTexture* tex = textureSlot(texture);
+	if (tex && tex->pendingUploadFlush)
+	{
+		tex->pendingUploadFlush = false;
+		dsiFlushPendingUpload(texture, *tex);
+	}
 }
 
 void renderSetActiveTextureUnit(int textureUnit)
@@ -1563,6 +1690,52 @@ void renderDeleteTextures(int count, const int* textures)
 			g_textures[textures[i]] = DsiTexture{};
 }
 
+// The actual GPU re-upload half of a sub-image patch -- see DsiTexture::
+// pendingUploadFlush's own comment for why this is now separated from the
+// cheap CPU-side patch below and deferred to the texture's next real bind
+// instead of running once per renderTextureSubImageRgba() call.
+void dsiFlushPendingUpload(int name, DsiTexture& tex)
+{
+	// Real-hardware evidence (the vram= diagnostic added alongside this):
+	// once VRAM pressure first forces a forceHighPrecision texture
+	// (terrain.png) onto the paletted fallback, it never gets room back --
+	// "high-precision upload failed for 256x256... vram=484/512KB" fired on
+	// every single tick's water/lava/fire animation patch for the rest of a
+	// whole session, hundreds of times in a row, the number never moving.
+	// uploadTexture() tries the RGBA path first unconditionally for a
+	// forceHighPrecision texture on every call regardless of whether the
+	// exact same attempt failed a tick ago -- a wasted, doomed
+	// glTexImage2D() call every tick with zero chance of succeeding while
+	// nothing frees VRAM in between, before falling through to the exact
+	// same tryUploadPaletted() call this reaches directly below anyway.
+	// Skip straight to it once a texture is already resident as paletted: a
+	// full reload (renderTextureImageRgba() -- a texture pack switch, the
+	// resource's first load) still gets a fresh RGBA attempt from scratch,
+	// this only stops a patch from re-litigating a fit that just failed a
+	// moment ago for no reason it would not fail again this moment too.
+	if (tex.paletted)
+	{
+		int param = 0;
+		if (!tex.clamp)
+			param |= GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T;
+		// forceRebuild=false: reuses tex's already-established stable
+		// palette (tryUploadWithStablePalette()) instead of re-deriving it
+		// from this patch alone -- same reasoning uploadTexture()'s own
+		// call below already documented, just reached without the doomed
+		// RGBA attempt in front of it.
+		tex.allocated = tryUploadPaletted(name, tex, param, false);
+		return;
+	}
+
+	// Same dimensions as the already-successful initial upload, so this can't
+	// newly fail the power-of-two check -- but propagate honestly anyway
+	// rather than assume, in case VRAM pressure is what fails it this time.
+	// forceRebuildPalette=false: reuse tex's already-established stable
+	// palette instead of re-deriving it from this patch alone -- see
+	// tryUploadWithStablePalette()'s comment for why.
+	tex.allocated = uploadTexture(name, tex, false);
+}
+
 void renderTextureSubImageRgba(int level, int x, int y, int width, int height, const void* pixels)
 {
 	// Mip levels other than 0 are not tracked in the CPU-side shadow copy yet
@@ -1581,44 +1754,12 @@ void renderTextureSubImageRgba(int level, int x, int y, int width, int height, c
 		std::memcpy(dstRow, srcRow, (std::size_t)width * 4);
 	}
 
-	// Real-hardware evidence (the vram= diagnostic added alongside this):
-	// once VRAM pressure first forces a forceHighPrecision texture
-	// (terrain.png) onto the paletted fallback, it never gets room back --
-	// "high-precision upload failed for 256x256... vram=484/512KB" fired on
-	// every single tick's water/lava/fire animation patch for the rest of a
-	// whole session, hundreds of times in a row, the number never moving.
-	// uploadTexture() tries the RGBA path first unconditionally for a
-	// forceHighPrecision texture on every call regardless of whether the
-	// exact same attempt failed a tick ago -- a wasted, doomed
-	// glTexImage2D() call every tick with zero chance of succeeding while
-	// nothing frees VRAM in between, before falling through to the exact
-	// same tryUploadPaletted() call this reaches directly below anyway.
-	// Skip straight to it once a texture is already resident as paletted: a
-	// full reload (renderTextureImageRgba() -- a texture pack switch, the
-	// resource's first load) still gets a fresh RGBA attempt from scratch,
-	// this only stops a patch from re-litigating a fit that just failed a
-	// moment ago for no reason it would not fail again this moment too.
-	if (tex->paletted)
-	{
-		int param = 0;
-		if (!tex->clamp)
-			param |= GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T;
-		// forceRebuild=false: reuses tex's already-established stable
-		// palette (tryUploadWithStablePalette()) instead of re-deriving it
-		// from this patch alone -- same reasoning uploadTexture()'s own
-		// call below already documented, just reached without the doomed
-		// RGBA attempt in front of it.
-		tex->allocated = tryUploadPaletted(g_boundTexture, *tex, param, false);
-		return;
-	}
-
-	// Same dimensions as the already-successful initial upload, so this can't
-	// newly fail the power-of-two check -- but propagate honestly anyway
-	// rather than assume, in case VRAM pressure is what fails it this time.
-	// forceRebuildPalette=false: reuse tex's already-established stable
-	// palette instead of re-deriving it from this patch alone -- see
-	// tryUploadWithStablePalette()'s comment for why.
-	tex->allocated = uploadTexture(g_boundTexture, *tex, false);
+	// Defer the expensive GPU re-upload to this texture's next real bind
+	// (renderBindTexture() below) instead of doing it here -- see
+	// DsiTexture::pendingUploadFlush's comment for the real-hardware cost
+	// this batches away when several TextureFX patch the same texture
+	// (typically terrain.png) within one updateDynamicTextures() tick.
+	tex->pendingUploadFlush = true;
 }
 
 void renderTextureImageRgba(int level, int width, int height, const void* pixels)
@@ -1634,6 +1775,12 @@ void renderTextureImageRgba(int level, int width, int height, const void* pixels
 	tex->height = height;
 	tex->rgba.assign(static_cast<const std::uint8_t*>(pixels),
 	                  static_cast<const std::uint8_t*>(pixels) + (std::size_t)width * height * 4);
+	// A genuine full reload always uploads immediately below, so any pending
+	// deferred patch upload (DsiTexture::pendingUploadFlush) this content
+	// replaces is moot -- clear it rather than leave a stale flag that would
+	// otherwise cost one redundant (harmless, but wasted) re-upload at this
+	// texture's next bind.
+	tex->pendingUploadFlush = false;
 	// See uploadTexture()'s own comment: a real hardware upload can fail
 	// (most likely a non-power-of-two source image) where the old code here
 	// always reported success. renderTextureIsValid() reads this flag, and
@@ -1809,16 +1956,27 @@ void renderClear(unsigned int mask)
 	// buffer there so the screen is never occluded by that same frame's 3D
 	// geometry. On this backend that call does nothing -- the whole frame's
 	// world+HUD+screen geometry shares ONE depth buffer pass, cleared only
-	// once, at the next glFlush(). Anything drawn earlier in the frame with
-	// depth test on and left enabled (GuiIngame.cpp's hotbar item icons were
-	// exactly this, fixed separately by bracketing them like GuiContainer.cpp
-	// already does) leaves real depth values in place for the rest of the
-	// frame, which can make a screen's own same-position redraw silently fail
-	// the depth test and never appear. There is no cheap mid-frame "clear
-	// now" on this GPU (the rear-plane/clear values apply once, at frame
-	// start) -- a real fix would need a manual full-viewport depth-only quad
-	// draw here (write depth, disable colour write) instead of trusting this
-	// no-op, if another case of the same symptom turns up.
+	// once, at the next glFlush(). There is no cheap mid-frame "clear now" on
+	// this GPU (the rear-plane/clear values apply once, at frame start) -- a
+	// real fix would need a manual full-viewport depth-only quad draw here
+	// (write depth, disable colour write) instead of trusting this no-op.
+	//
+	// GuiIngame.cpp's hotbar item icons staying visible over the pause menu/
+	// creative inventory drawn afterward was SUSPECTED to be exactly this
+	// (icons write depth with the test on, never cleared, screen's own redraw
+	// fails against it) -- but bracketing the icon loop with renderEnable/
+	// renderDisable(DepthTest) the way GuiContainer.cpp does for the same
+	// class of draw was confirmed by the user to change nothing, and tracing
+	// why found renderEnable/renderDisable(DepthTest) and renderDepthFunc()
+	// are BOTH unconditional no-ops on this backend (opaque polygons always
+	// depth-test at a fixed less-or-equal comparison; see those functions'
+	// own comments) -- so DepthTest was never actually toggled by that fix in
+	// the first place, on or off. This no-op clear is still real and still
+	// worth knowing about for whatever the actual mechanism turns out to be,
+	// but is NOT confirmed to be that mechanism for the hotbar case
+	// specifically; see GuiIngame.cpp's own comment for the current best lead
+	// (a Z-value mismatch between the icon's 3D geometry and the screen's
+	// flat 2D overlay, not a depth-STATE leak).
 	(void)mask;
 }
 

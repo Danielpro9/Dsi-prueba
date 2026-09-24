@@ -26,6 +26,14 @@
 // every tick, which is exactly why it evaded the earlier per-tick suspects.
 // Split into its two halves (World.cpp's saveLevel(), below) since it's not
 // yet known which one is actually expensive on console storage.
+//
+// Follow-up (real-hardware report, later round): the "1000-per-call cap" this
+// comment describes is no longer a fixed vanilla constant -- it is
+// PLATFORM_MAX_SCHEDULED_TICK_UPDATES (see TickUpdates() below), DSi-tuned
+// tighter (100) once 80-190ms worldTick spikes matching this same saturating-
+// cap theory showed up on that platform specifically. This comment's own
+// 2026-08-12 investigation predates that change and still accurately
+// describes vanilla/PS2's behaviour (still capped at 1000 there).
 #endif
 
 #include <limits>
@@ -5239,9 +5247,9 @@ bool World::TickUpdates(bool flag)
     }
 #endif
 
-    if (size > 1000)
+    if (size > PLATFORM_MAX_SCHEDULED_TICK_UPDATES)
     {
-        size = 1000;
+        size = PLATFORM_MAX_SCHEDULED_TICK_UPDATES;
     }
 
     for (int j = 0; j < size; j++)

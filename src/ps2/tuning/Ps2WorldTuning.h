@@ -2,6 +2,22 @@
 
 #define PS2_SKIP_MOB_SPAWNING 0
 
+// World::TickUpdates() drains the scheduledTickTreeSet (fluid spread, leaf
+// decay, redstone, crop growth, ...) in one synchronous call every world
+// tick, with vanilla's own hard cap of 1000 entries and NO time bound beyond
+// that count -- unlike the RANDOM_TICK_CHUNKS_PER_TICK round-robin below,
+// which already exists for exactly this class of problem. A burst of newly
+// streamed-in chunks (freshly generated water/lava spreading, or a large
+// redstone/crop area becoming simulated at once) can schedule far more than
+// a normal tick's worth of updates, all due on the same world tick, so the
+// uncapped drain processes the whole backlog synchronously instead of
+// spreading it out -- the same shape of spike this file's own history
+// records for updateBlocksAndPlayCaveSounds above, just in a different call.
+// 1000 here is vanilla's own cap, unchanged for PS2 (not the platform this
+// round's real-hardware report was about); DsiWorldTuning.h overrides this
+// tighter for the ARM9's much smaller per-tick budget.
+#define PS2_MAX_SCHEDULED_TICK_UPDATES 1000
+
 // Simulation radii follow the RENDER window, not the streaming cache.
 //
 // Both of these used to read PS2_CHUNK_CACHE_RADIUS, which was fine only while

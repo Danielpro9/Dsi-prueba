@@ -779,26 +779,30 @@ void GuiIngame::renderGameOverlay(float_t partialTick, bool showDebug, int_t mou
 	const std::uint32_t cycHudItems = platformProfileRenderPhaseBegin();
 #endif
 #if PLATFORM_GUI_FORCE_DEPTH_DISABLED
-	// Real-hardware evidence (reported since the earliest builds: hotbar item
-	// icons stay visible over EVERYTHING drawn afterward, including the pause
-	// menu and the creative inventory) -- GuiContainer::drawScreen() already
-	// brackets its own 3D item-icon draws with exactly this (see its own
-	// identical comment), but this hotbar loop never did. DepthTest enters
-	// this function in whatever state the world/HUD rendering just before it
-	// left -- effectively always enabled, since terrain rendering depends on
-	// it -- so these icons draw WITH depth test on and WRITE real depth
-	// values, then leave it enabled afterward. RenderAPI_DSI.cpp's
-	// renderClear() is a confirmed no-op on this backend (the DS 3D engine
-	// only clears once per hardware frame, at the next glFlush(), not on
-	// demand mid-frame the way EntityRenderer.cpp's renderClear(Depth) call
-	// before drawing the current screen assumes) -- so those leftover depth
-	// values, and DepthTest still being on, both carry straight into
-	// whatever screen draws next in the same frame. A screen's own item icon
-	// redrawn at the same position can then fail the depth test against the
-	// hotbar's own already-written value and get silently skipped, leaving
-	// the hotbar's icon visible through it. Bracketing this loop the same
-	// way GuiContainer.cpp already does removes both the stray depth writes
-	// and the leaked enabled state.
+	// Bracketing this loop the same way GuiContainer::drawScreen() already
+	// brackets its own 3D item-icon draws (see its identical comment) is
+	// CORRECT and needed on PS2/WII, where these three calls are real state
+	// changes -- but confirmed by the user to make no difference on DSi for
+	// the reported bug (hotbar item icons staying visible over the pause
+	// menu/creative inventory drawn afterward). Traced why: RenderAPI_DSI.cpp's
+	// renderEnable/renderDisable(DepthTest) fall through to a silent no-op
+	// for that specific capability (that switch's own comment: "DepthTest is
+	// always on for opaque polygons"), renderDepthFunc() is unconditionally a
+	// no-op there too ("DS depth comparison is fixed at less-or-equal"), and
+	// renderDepthMask() only affects TRANSLUCENT polygons' depth WRITES, not
+	// opaque ones like these icons -- so none of the three calls below change
+	// anything on this backend. Left in place (harmless, and correct for
+	// PS2/WII) rather than special-cased out.
+	//
+	// The real DSi mechanism is still unconfirmed but has a concrete next
+	// lead: opaque polygons on this hardware always write depth, and the
+	// comparison is fixed at less-or-equal, so a screen's later flat 2D
+	// overlay quad only fails to redraw over an icon if the icon's own
+	// geometry is genuinely NEARER in Z -- plausible if RenderItem::
+	// renderItemIntoGUI()'s 3D icon model pushes itself toward the camera
+	// (a common "raised icon" technique) by more than whatever Z gap the
+	// subsequent screen's own 2D draws use. Needs a real-hardware Z-value
+	// comparison to confirm before attempting a fix here, not another guess.
 	renderEnable(RenderCapability::DepthTest);
 	renderDepthMask(true);
 	renderDepthFunc(RenderCompare::LessEqual);

@@ -194,6 +194,20 @@ struct RenderCapturedMesh
     // already is for backends that never set it.
     bool positionIsV16 = false;
 
+    // DSi-only, same precedent as positionIsV16 immediately above: true once
+    // this mesh's texcoord field has been pre-converted from normalized
+    // float2 to the DS GPU's native t16 texel-space fixed-point format
+    // (glTexCoord2t16()), skipping the per-frame float multiply-by-texture-
+    // size glTexCoord2f() does internally on every vertex, every frame a
+    // section replays. Only ever set for a mesh dsiRepackCapturedMeshFast()
+    // confirmed is always drawn against a specific, already-resident texture
+    // (main terrain sections against terrain.png) -- never safe to bake in
+    // generally, since a captured mesh drawn against different textures on
+    // different frames needs the actual bound texture's size at draw time,
+    // which is what the float path still correctly provides. Ignored on
+    // every other backend, same as positionIsV16.
+    bool texCoordIsT16 = false;
+
     bool empty() const { return vertexCount <= 0 || raw.empty(); }
     std::size_t byteSize() const { return raw.size() * sizeof(std::int32_t); }
     void clear()
