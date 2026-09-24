@@ -1160,6 +1160,45 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 
 	const std::uint8_t* base = reinterpret_cast<const std::uint8_t*>(mesh.raw.data());
 
+	// One-shot diagnostic (on request): real-hardware reports that terrain
+	// renders with each block's flat colour but no texture pattern at all,
+	// in the overworld as much as anywhere else -- even after confirming
+	// terrain.png is bound (renderTerrainBeginPass()) and successfully
+	// resident at full RGBA quality. That rules out the upload/VRAM story
+	// this file spent the round chasing; whatever this is has to be in what
+	// actually reaches the GPU per vertex. Logs the first textured captured
+	// mesh this function ever draws: whether it really carries texcoord
+	// data, the first vertex's raw UV bytes, and which texture is bound at
+	// that exact moment -- the next real-hardware log says directly whether
+	// UV data is even present/sane, instead of guessing further from code
+	// alone.
+	// Gated on hasBrightness too, not just hasTexture: only WorldRendererDsi.cpp's
+	// terrain sections carry per-vertex lightmap brightness data (see its mesh
+	// assembly) -- RenderGlobal.cpp's sky/star meshes and GuiIngame.cpp's HUD
+	// caches also go through this same generic draw path but never set it, so
+	// this specifically catches the first actual block/terrain draw instead of
+	// whatever unrelated captured mesh happens to render first in a frame.
+	static bool s_dsiLoggedFirstTexturedDraw = false;
+	if (!s_dsiLoggedFirstTexturedDraw && mesh.hasTexture && mesh.hasBrightness && mesh.vertexCount > 0)
+	{
+		s_dsiLoggedFirstTexturedDraw = true;
+		float uvFirst[2] = { -1.0f, -1.0f };
+		std::memcpy(uvFirst, base + mesh.texCoordOffset, sizeof(uvFirst));
+		float uvLast[2] = { -1.0f, -1.0f };
+		if (mesh.vertexCount > 1)
+			std::memcpy(uvLast, base + (std::size_t)(mesh.vertexCount - 1) * mesh.stride + mesh.texCoordOffset, sizeof(uvLast));
+		const DsiTexture* boundTex = textureSlot(g_boundTexture);
+		MC_LOG_WARN("dsi", "first textured captured draw: boundTex=%d allocated=%d paletted=%d texW=%d texH=%d\n",
+			g_boundTexture,
+			boundTex ? (boundTex->allocated ? 1 : 0) : -1,
+			boundTex ? (boundTex->paletted ? 1 : 0) : -1,
+			boundTex ? boundTex->width : -1,
+			boundTex ? boundTex->height : -1);
+		MC_LOG_WARN("dsi", "  vertexCount=%d stride=%d texCoordOffset=%d firstUV=(%f,%f) lastUV=(%f,%f)\n",
+			mesh.vertexCount, mesh.stride, mesh.texCoordOffset,
+			(double)uvFirst[0], (double)uvFirst[1], (double)uvLast[0], (double)uvLast[1]);
+	}
+
 	// Same translucency approximation as drawInterleavedMesh() -- see its
 	// own comment on why first+last vertex alpha is sampled, not scanned.
 	if (mesh.hasColor)
