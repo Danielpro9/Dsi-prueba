@@ -1424,6 +1424,72 @@ int_t RenderGlobal::renderSortedRenderers(int_t i, int_t j, int_t k, double d)
 	double d2 = entityliving->lastTickPosY + (entityliving->posY - entityliving->lastTickPosY) * d;
 	double d3 = entityliving->lastTickPosZ + (entityliving->posZ - entityliving->lastTickPosZ) * d;
 
+#if PLATFORM_DSI
+	// Real-hardware report: after the enableLightmap texture-binding fix (which
+	// only ever touched what texture is bound, never section position/culling),
+	// terrain that IS visible looks correctly textured, but the player reports
+	// nearby terrain missing while a section farther off renders -- "floating"
+	// in an otherwise black view. Position/translate math (RenderList::render()'s
+	// origin-to-viewer translate plus drawCapturedTerrain()'s posXClip offset)
+	// reads correctly on inspection, and DSi's frustum re-test (this file's
+	// clipRenderersByFrustrum(), the plain non-PS2/non-Wii branch, i.e. vanilla's
+	// own throttled re-test) is the same logic every other platform already
+	// relies on -- neither turned up an obvious bug from reading alone. Rather
+	// than guess further, log what is actually drawn each pass: the closest and
+	// farthest distance among sections in this call's renderBatchRenderers (what
+	// actually rendered this pass), plus how many PENDING (not yet built)
+	// sections sit close to the player and whether those close-pending ones are
+	// currently classified in-frustum -- distinguishing "close sections simply
+	// have not finished building yet" from "close sections are being skipped by
+	// the frustum test" from "close sections built fine and something else is
+	// wrong", which the next real-hardware log will say directly.
+	if (k == 0)
+	{
+		static unsigned int s_dsiTerrainDiagTick = 0;
+		if (++s_dsiTerrainDiagTick % 120 == 0)
+		{
+			float minDrawnSq = -1.0f;
+			float maxDrawnSq = -1.0f;
+			for (WorldRenderer *r : renderBatchRenderers)
+			{
+				if (r == nullptr)
+					continue;
+				const float sq = r->distanceToEntitySquared(entityliving);
+				if (minDrawnSq < 0.0f || sq < minDrawnSq)
+					minDrawnSq = sq;
+				if (sq > maxDrawnSq)
+					maxDrawnSq = sq;
+			}
+
+			float minPendingSq = -1.0f;
+			int_t pendingClose = 0;
+			int_t pendingCloseInFrustum = 0;
+			for (WorldRenderer *r : worldRenderersToUpdate)
+			{
+				if (r == nullptr)
+					continue;
+				const float sq = r->distanceToEntitySquared(entityliving);
+				if (minPendingSq < 0.0f || sq < minPendingSq)
+					minPendingSq = sq;
+				if (sq < 32.0f * 32.0f)
+				{
+					pendingClose++;
+					if (r->isInFrustum)
+						pendingCloseInFrustum++;
+				}
+			}
+
+			MC_LOG_INFO("dsi", "terrain diag: playerY=%.1f drawn=%d minDrawnDist=%.1f maxDrawnDist=%.1f"
+				" pending=%d pendingClose=%d pendingCloseInFrustum=%d minPendingDist=%.1f\n",
+				(double)d2, (int)renderBatchRenderers.size(),
+				(double)(minDrawnSq >= 0.0f ? std::sqrt(minDrawnSq) : -1.0f),
+				(double)(maxDrawnSq >= 0.0f ? std::sqrt(maxDrawnSq) : -1.0f),
+				(int)worldRenderersToUpdate.size(), (int)pendingClose, (int)pendingCloseInFrustum,
+				(double)(minPendingSq >= 0.0f ? std::sqrt(minPendingSq) : -1.0f));
+		}
+	}
+#endif
+
 	// Publish the eye before any section is submitted. A backend that culls
 	// terrain against it -- the Wii's face-direction cull -- must decide on the
 	// same interpolated position the pass is drawn with, or geometry pops in and
