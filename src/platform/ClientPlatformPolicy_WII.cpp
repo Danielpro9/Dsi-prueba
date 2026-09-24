@@ -38,6 +38,10 @@ void releaseWorldEntryAssets(RenderEngine*)
 {
 }
 
+void releaseWorldExitAssets(RenderEngine*)
+{
+}
+
 int panoramaSampleGrid()
 {
     return 8;

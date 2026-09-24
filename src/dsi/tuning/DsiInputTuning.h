@@ -22,6 +22,20 @@
 // reads as a "full" turn.
 #define DSI_DIRECT_CAMERA_SCALE 96.0f
 #define DSI_DIRECT_CAMERA_INVERT_X 0
-#define DSI_DIRECT_CAMERA_INVERT_Y 0
+// Real-hardware evidence (reported: dragging down on the touch screen makes
+// the camera look UP, and vice versa -- inverted from every other input
+// path). InputBackend_DSI.cpp's dsiUpdateTouchCameraDelta() computes
+// g_touchDeltaY as touch.py - g_prevTouchY, i.e. the DS touch panel's own
+// raster convention (py increases DOWN the screen), so a downward drag is a
+// POSITIVE raw delta. Entity::turnEntity(yaw, pitch) does
+// `rotationPitch -= pitch * 0.15f`, the same convention the PC mouse path
+// (mouseHelper->deltaY, LWJGL-style: positive = moved UP) and PS2's own
+// analog stick both already satisfy -- PS2_DIRECT_CAMERA_INVERT_Y is 1 for
+// exactly this reason (Ps2InputTuning.h). This file's own INVERT_Y was set
+// to 0 independently instead of matching PS2's already-correct value, so a
+// downward (positive) touch-drag delta reached turnEntity un-negated and
+// DECREASED pitch -- looking up on a downward drag. 1 matches PS2's value
+// and the sign every other input path already relies on.
+#define DSI_DIRECT_CAMERA_INVERT_Y 1
 #define DSI_DIRECT_CAMERA_REFERENCE_FPS 60.0f
 #define DSI_DIRECT_CAMERA_MAX_DT 0.10f

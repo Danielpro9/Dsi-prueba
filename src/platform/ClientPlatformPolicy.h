@@ -14,6 +14,7 @@ namespace ClientPlatformPolicy
     void applyGameSettingsDefaults(GameSettings* settings);
     void preloadStartupTextures(RenderEngine* renderEngine);
     void releaseWorldEntryAssets(RenderEngine* renderEngine);
+    void releaseWorldExitAssets(RenderEngine* renderEngine);
     int panoramaSampleGrid();
     void reportCrash(const std::string& description);
 }

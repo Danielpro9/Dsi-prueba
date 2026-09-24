@@ -114,6 +114,52 @@ void releaseWorldEntryAssets(RenderEngine* renderEngine)
 	renderEngine->releaseTexture("/legacy/tick.png");
 	renderEngine->releaseTexture("/legacy/tickbox.png");
 	renderEngine->releaseTexture("/legacy/tickbox_hovered.png");
+	// Real-hardware evidence (reported: hundreds of repeated "GPU out of
+	// texture VRAM space" / "falling back to paletted" / "colour
+	// quantization" warnings throughout an entire play session, plus a
+	// performance regression): this function only ever released the LEGACY
+	// menu's own textures (/legacy/*). When Legacy UI is off, GuiMainMenu's
+	// non-legacy menu instead loads six /title/bg/panorama0.png..5.png
+	// cubemap faces plus /title/mclogo.png -- ClientPlatformPolicy_PS2.cpp's
+	// own releaseWorldEntryAssets() already releases these exact paths for
+	// the identical reason (PS2 supports both menu styles too), but this
+	// DSi copy never picked that up. A player who visits the non-legacy menu
+	// even once before entering a world leaves all seven of those textures
+	// resident for the rest of the session, permanently eating into the
+	// hard 512 KB texture VRAM ceiling gameplay's own terrain/items/icons/
+	// mob-skin textures compete for -- exactly the kind of chronic pressure
+	// that turns every later texture bind into a failed-upload retry.
+	for (int face = 0; face < 6; ++face)
+		renderEngine->releaseTexture("/title/bg/panorama" + std::to_string(face) + ".png");
+	renderEngine->releaseTexture("/title/mclogo.png");
+	renderEngine->clearDecodedTextureCache();
+}
+
+// Real-hardware evidence (reported: hotbar/HUD elements and other GUI
+// textures intermittently missing or falling back to a checkerboard while
+// exploring, worst right after heavy chunk loading -- and, separately, the
+// same "GPU out of texture VRAM space" spam that motivated the menu-texture
+// additions above): releaseWorldEntryAssets() frees menu-only textures
+// before a world loads, but nothing on this platform ever freed the WORLD's
+// own textures when leaving it. terrain.png/gui/items.png/gui/icons.png/
+// mob skins/gui/inventory.png all stayed resident indefinitely once loaded,
+// so returning to the menu (legacy or not) had to fit menu textures into
+// whatever fraction of the 512 KB budget gameplay's textures had not
+// already claimed -- and a second play session compounded it further, since
+// nothing ever gave that space back. getTexture() reloads any of these
+// lazily the next time something actually needs them (a new world, or the
+// inventory screen being reopened), matching the same lazy-reload pattern
+// releaseWorldEntryAssets() already relies on for menu textures.
+void releaseWorldExitAssets(RenderEngine* renderEngine)
+{
+	if (renderEngine == nullptr)
+		return;
+
+	renderEngine->releaseTexture("/terrain.png");
+	renderEngine->releaseTexture("/gui/items.png");
+	renderEngine->releaseTexture("/gui/icons.png");
+	renderEngine->releaseTexture("/gui/inventory.png");
+	renderEngine->releaseTexture("/mob/char.png");
 	renderEngine->clearDecodedTextureCache();
 }
 

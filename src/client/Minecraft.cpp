@@ -1586,6 +1586,7 @@ void Minecraft::runTick()
         {
             AxisAlignedBB::trimBoundingBoxPool();
             Vec3D::trimVectorPool();
+            ClientPlatformPolicy::releaseWorldExitAssets(renderEngine);
             platformMemoryCheckpoint("back-to-menu post-trim");
 
             // WorldClient only borrows NetClientHandler. Once its old world is gone,

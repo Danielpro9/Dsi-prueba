@@ -74,6 +74,10 @@ void releaseWorldEntryAssets(RenderEngine* renderEngine)
     renderEngine->clearDecodedTextureCache();
 }
 
+void releaseWorldExitAssets(RenderEngine*)
+{
+}
+
 int panoramaSampleGrid()
 {
     return 2;
