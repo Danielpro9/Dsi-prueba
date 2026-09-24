@@ -159,7 +159,15 @@ void releaseWorldExitAssets(RenderEngine* renderEngine)
 	renderEngine->releaseTexture("/gui/items.png");
 	renderEngine->releaseTexture("/gui/icons.png");
 	renderEngine->releaseTexture("/gui/inventory.png");
-	renderEngine->releaseTexture("/mob/char.png");
+	// Was just "/mob/char.png" (the player skin) -- real-hardware evidence
+	// (a debug.log showing texture VRAM pinned at 501/512KB for the rest of
+	// a session the moment several mob types had been seen, sourcing an
+	// 862ms palette-quantization stall) confirmed every OTHER /mob/*.png
+	// (zombie, pig, cow, skeleton, creeper, wolf, villager/*, ...) a session
+	// happened to load was never released here at all. See RenderEngine::
+	// releaseTexturesWithPrefix()'s own comment for why a prefix match
+	// replaces the old single hardcoded name instead of listing all ~40.
+	renderEngine->releaseTexturesWithPrefix("/mob/");
 	renderEngine->clearDecodedTextureCache();
 }
 

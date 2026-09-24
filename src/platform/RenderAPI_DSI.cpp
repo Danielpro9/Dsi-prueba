@@ -271,12 +271,6 @@ DsiTexture* textureSlot(int name)
 	return &g_textures[name];
 }
 
-// Defined below, near renderTextureSubImageRgba() (the deferred-upload
-// mechanism it belongs to); forward-declared here so renderBindTexture()
-// above that point in the file can call it. See DsiTexture::
-// pendingUploadFlush's comment for why this exists.
-void dsiFlushPendingUpload(int name, DsiTexture& tex);
-
 // RGBA8 -> DS GL_RGBA (15-bit direct colour, 1-bit alpha). Bit layout VERIFIED
 // against nds/arm9/video.h's ARGB16() macro: bit15=alpha, bits0-4=R, 5-9=G,
 // 10-14=B. The alpha channel only has one bit on this hardware, so anything at
@@ -637,8 +631,8 @@ bool tryUploadPaletted(int name, DsiTexture& tex, int param, bool forceRebuild)
 		if (result == PalettedUploadResult::Success)
 		{
 			if (quantShift > 0)
-				MC_LOG_WARN("dsi", "paletted upload used colour quantization (shift=%d, %u colours) to fit: %dx%d\n",
-					quantShift, (unsigned)colorCount, tex.width, tex.height);
+				MC_LOG_WARN("dsi", "paletted upload used colour quantization (shift=%d, %u colours) to fit: %dx%d id=%d\n",
+					quantShift, (unsigned)colorCount, tex.width, tex.height, name);
 			// One-shot diagnostic for the still-open "no PNG has transparency /
 			// black box behind text / empty hearts" investigation: real-hardware
 			// evidence so far confirms this exact paletted+COLOR0_TRANSPARENT
@@ -676,12 +670,12 @@ bool tryUploadPaletted(int name, DsiTexture& tex, int param, bool forceRebuild)
 		}
 		if (result == PalettedUploadResult::SpaceExhausted)
 		{
-			MC_LOG_WARN("dsi", "paletted upload rejected: %dx%d, %u colours, GPU out of texture VRAM space\n",
-				tex.width, tex.height, (unsigned)colorCount);
+			MC_LOG_WARN("dsi", "paletted upload rejected: %dx%d, %u colours, GPU out of texture VRAM space, id=%d\n",
+				tex.width, tex.height, (unsigned)colorCount, name);
 			return false;
 		}
-		MC_LOG_WARN("dsi", "palette overflow at shift=%d: %dx%d texture exceeds 255 distinct opaque colours%s\n",
-			quantShift, tex.width, tex.height, quantShift < 4 ? "; retrying with coarser colour quantization" : "");
+		MC_LOG_WARN("dsi", "palette overflow at shift=%d: %dx%d texture exceeds 255 distinct opaque colours id=%d%s\n",
+			quantShift, tex.width, tex.height, name, quantShift < 4 ? "; retrying with coarser colour quantization" : "");
 	}
 	return false; // Unreachable in practice: shift 4 always fits (at most 8 colours).
 }
@@ -1593,6 +1587,20 @@ void renderCullFace(RenderFace face)
 void renderColorMask(bool, bool, bool, bool)
 {
 }
+
+// Defined below, near renderTextureSubImageRgba() (the deferred-upload
+// mechanism it belongs to); forward-declared here so this function can call
+// it. See DsiTexture::pendingUploadFlush's comment for why this exists.
+//
+// NOTE: this declaration must stay at file (external-linkage) scope, same as
+// the real definition below -- it was originally placed a few hundred lines
+// up, inside the first anonymous namespace, which gave IT internal linkage
+// while the definition below (outside any anonymous namespace) has external
+// linkage; two distinct symbols with the same name, so the call below bound
+// to the (never-defined) internal one and the real definition went unused --
+// caught by the DsiBringup.nds link step: "undefined reference to
+// `(anonymous namespace)::dsiFlushPendingUpload(...)'".
+void dsiFlushPendingUpload(int name, DsiTexture& tex);
 
 void renderBindTexture(int texture)
 {

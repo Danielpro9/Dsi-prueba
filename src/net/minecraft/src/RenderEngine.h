@@ -38,6 +38,7 @@ public:
 	void updateTextureSubImage(const std::vector<int_t> &ai, int_t i, int_t j, int_t k);
 	void deleteTexture(int_t i);
 	void releaseTexture(const std::string &s);
+	void releaseTexturesWithPrefix(const std::string &prefix);
 	void clearDecodedTextureCache();
 	int_t getTextureForDownloadableImage(const std::string &s, const std::string &s1);
 	ThreadDownloadImageData *obtainImageData(const std::string &s, ImageBuffer *imagebuffer);

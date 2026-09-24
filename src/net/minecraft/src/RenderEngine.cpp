@@ -733,6 +733,18 @@ int_t RenderEngine::getTexture(const std::string &s)
 	GLAllocation::generateTextureNames(single);
 	int_t texture = single[0];
 
+#ifdef DSI_PLATFORM
+	// RenderAPI_DSI.cpp's palette-VRAM warnings (tryUploadPaletted() and
+	// friends) only ever see the raw GL texture id, never the resource path
+	// this class already has right here -- real-hardware evidence (a
+	// mid-gameplay palette-quantization stall costing an 862ms frame) had no
+	// way to say WHICH texture triggered it. This one-line correlation log,
+	// paired with adding the same id to those warnings, lets the next
+	// real-hardware log answer that with a simple id match instead of
+	// another guess.
+	MC_LOG_INFO("dsi", "texture id %d = '%s'\n", (int)texture, s.c_str());
+#endif
+
 #if PLATFORM_PS2
 	if (shouldLoadTextureAsync(s))
 	{
@@ -1790,6 +1802,26 @@ void RenderEngine::releaseTexture(const std::string &s)
 	failedTextures.erase(s);
 	field_28151_c.erase(s);
 	deleteTexture(texture);
+}
+
+// vanilla 1.2.5 ships ~40 distinct /mob/*.png entity textures (zombie, pig,
+// cow, skeleton, creeper, wolf, villager/*, ...), any subset of which a play
+// session can load depending on which mobs the player actually meets --
+// releaseWorldExitAssets() used to only know to release "/mob/char.png" (the
+// player skin) by name, missing every other one, so a session that had met
+// several mob types left all of their textures resident indefinitely, right
+// alongside the menu/legacy assets this function already correctly frees.
+// Prefix match instead of hardcoding the full list: cheaper to keep correct
+// as new mobs/skins are added, and releaseTexture() is already a safe no-op
+// for a name that was never loaded, so over-matching costs nothing here.
+void RenderEngine::releaseTexturesWithPrefix(const std::string &prefix)
+{
+	std::vector<std::string> toRelease;
+	for (const auto &entry : textureMap)
+		if (entry.first.compare(0, prefix.size(), prefix) == 0)
+			toRelease.push_back(entry.first);
+	for (const std::string &name : toRelease)
+		releaseTexture(name);
 }
 
 void RenderEngine::clearDecodedTextureCache()
