@@ -408,7 +408,34 @@ PalettedUploadResult tryUploadPalettedAtDepth(int name, const DsiTexture& tex, i
 	if (!uploaded)
 		return PalettedUploadResult::SpaceExhausted;
 
-	glColorTableNtr(palette.size(), palette.data());
+	// Real-hardware investigation (still-open "no PNG has transparency" report,
+	// after ruling out every upload/bind/draw-time GPU state this file
+	// controls -- see the draw-time GFX_CONTROL/GFX_ALPHA_TEST diagnostic
+	// above): this return value used to be discarded. libnds's own
+	// glColorTableNtr() (videoGL.c) allocates from PALETTE VRAM -- banks E/F/G,
+	// a separate and much smaller budget than the 512KB texture-IMAGE budget
+	// (banks A-D) everything else in this file tracks -- and returns 0,
+	// silently leaving NO palette bound to this texture (GFX_PAL_FORMAT left
+	// at 0), if that separate budget is exhausted. Every other failure path
+	// in this file already falls through to a fallback; this one was
+	// reporting Success regardless, so a texture whose pixel DATA upload
+	// worked but whose PALETTE upload silently failed would draw with no
+	// colour lookup for any index -- including index 0, whose
+	// GL_TEXTURE_COLOR0_TRANSPARENT "clear" behaviour this whole mechanism
+	// depends on. Unlike the image-data VRAM above (SpaceExhausted, not
+	// worth retrying at a smaller quantShift -- a coarser quantization does
+	// not change that byte footprint), a coarser quantShift DOES shrink the
+	// palette's own footprint here, so this reports ColorOverflow instead:
+	// the same "retry at a coarser quantization" path already used when the
+	// palette does not fit in 256 entries applies just as well when it does
+	// not fit in palette VRAM. The warning below turns the next real-hardware
+	// log into a direct answer instead of another guess.
+	if (!glColorTableNtr(palette.size(), palette.data()))
+	{
+		MC_LOG_WARN("dsi", "paletted upload's colour table rejected: %dx%d, %u colours, palette VRAM (banks E/F/G) exhausted\n",
+			tex.width, tex.height, (unsigned)palette.size());
+		return PalettedUploadResult::ColorOverflow;
+	}
 	return PalettedUploadResult::Success;
 }
 
@@ -528,7 +555,16 @@ bool tryUploadWithStablePalette(int name, DsiTexture& tex, int param)
 	if (!uploaded)
 		return false;
 
-	glColorTableNtr(tex.stablePalette.size(), tex.stablePalette.data());
+	// See tryUploadPalettedAtDepth()'s identical check for why this return
+	// value matters: glColorTableNtr() can silently fail (palette VRAM,
+	// banks E/F/G, exhausted) while leaving the texture's pixel DATA upload
+	// above looking successful, previously reported as success regardless.
+	if (!glColorTableNtr(tex.stablePalette.size(), tex.stablePalette.data()))
+	{
+		MC_LOG_WARN("dsi", "stable-palette re-upload's colour table rejected: %dx%d, %u colours, palette VRAM (banks E/F/G) exhausted\n",
+			tex.width, tex.height, (unsigned)tex.stablePalette.size());
+		return false;
+	}
 	return true;
 }
 
@@ -1265,11 +1301,112 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 
 	const std::uint8_t* base = reinterpret_cast<const std::uint8_t*>(mesh.raw.data());
 
-	// Two one-shot diagnostics that used to live here -- the original "terrain
-	// has no texture pattern at all" check, and the grass/leaves grey-tint
-	// brightness-decoding investigation -- were removed once both bugs they
-	// were chasing were confirmed fixed by the user on real hardware. See git
-	// history if either investigation is needed again.
+	// One-shot diagnostic (on request): real-hardware reports that terrain
+	// renders with each block's flat colour but no texture pattern at all,
+	// in the overworld as much as anywhere else -- even after confirming
+	// terrain.png is bound (renderTerrainBeginPass()) and successfully
+	// resident at full RGBA quality. That rules out the upload/VRAM story
+	// this file spent the round chasing; whatever this is has to be in what
+	// actually reaches the GPU per vertex. Logs the first textured captured
+	// mesh this function ever draws: whether it really carries texcoord
+	// data, the first vertex's raw UV bytes, and which texture is bound at
+	// that exact moment -- the next real-hardware log says directly whether
+	// UV data is even present/sane, instead of guessing further from code
+	// alone.
+	// Gated on hasBrightness too, not just hasTexture: only WorldRendererDsi.cpp's
+	// terrain sections carry per-vertex lightmap brightness data (see its mesh
+	// assembly) -- RenderGlobal.cpp's sky/star meshes and GuiIngame.cpp's HUD
+	// caches also go through this same generic draw path but never set it, so
+	// this specifically catches the first actual block/terrain draw instead of
+	// whatever unrelated captured mesh happens to render first in a frame.
+	static bool s_dsiLoggedFirstTexturedDraw = false;
+	if (!s_dsiLoggedFirstTexturedDraw && mesh.hasTexture && mesh.hasBrightness && mesh.vertexCount > 0)
+	{
+		s_dsiLoggedFirstTexturedDraw = true;
+		float uvFirst[2] = { -1.0f, -1.0f };
+		std::memcpy(uvFirst, base + mesh.texCoordOffset, sizeof(uvFirst));
+		float uvLast[2] = { -1.0f, -1.0f };
+		if (mesh.vertexCount > 1)
+			std::memcpy(uvLast, base + (std::size_t)(mesh.vertexCount - 1) * mesh.stride + mesh.texCoordOffset, sizeof(uvLast));
+		const DsiTexture* boundTex = textureSlot(g_boundTexture);
+		MC_LOG_WARN("dsi", "first textured captured draw: boundTex=%d allocated=%d paletted=%d texW=%d texH=%d\n",
+			g_boundTexture,
+			boundTex ? (boundTex->allocated ? 1 : 0) : -1,
+			boundTex ? (boundTex->paletted ? 1 : 0) : -1,
+			boundTex ? boundTex->width : -1,
+			boundTex ? boundTex->height : -1);
+		MC_LOG_WARN("dsi", "  vertexCount=%d stride=%d texCoordOffset=%d firstUV=(%f,%f) lastUV=(%f,%f)\n",
+			mesh.vertexCount, mesh.stride, mesh.texCoordOffset,
+			(double)uvFirst[0], (double)uvFirst[1], (double)uvLast[0], (double)uvLast[1]);
+	}
+
+	// One-shot diagnostic chasing a NEW real-hardware report (2026-09-24, after
+	// the enableLightmap/disableLightmap fix above was confirmed to have solved
+	// the "no texture at all" bug): grass tops and leaves render as flat grey
+	// instead of biome-tinted green. Extensive reading of the shared tint
+	// pipeline (CustomColorizer::getColorMultiplier(), RenderBlocks.cpp's
+	// renderStandardBlock()/renderStandardBlockWithColorMultiplier(), the
+	// ColorizerGrass fallback) found nothing DSi-specific or platform-gated --
+	// every one of those runs identically on every platform. The one structural
+	// oddity found on THIS side: this file's hasBrightness handling below reads
+	// mesh.brightnessOffset as two consecutive 32-bit floats (8 bytes), but
+	// Tessellator::addVertex() (Tessellator.cpp) only ever writes ONE packed
+	// int there (rawBuffer[+7] = brightness, the vanilla `skylight<<20 |
+	// blocklight<<4`-shaped value every other platform unpacks via
+	// `brightness % 65536` / `brightness / 65536`, e.g. RenderManager.cpp,
+	// RenderPainting.cpp, TileEntityRenderer.cpp all do this same split) --
+	// meaning the second "float" read here is 4 bytes past that single packed
+	// int, into the START of the NEXT vertex's position data. Whether that
+	// actually explains the grey tint (values reinterpreted as float bit
+	// patterns, then clamped, could plausibly land on a near-constant lightmap
+	// corner) is unconfirmed -- general terrain lighting still looks broadly
+	// correct in every screenshot so far, which this theory does not cleanly
+	// explain either. Rather than guess further, log the raw bytes directly:
+	// the first vertex of the first mesh that carries BOTH a tint colour and
+	// brightness (i.e. an actual grass-top or leaf face, not a plain block)
+	// -- the packed brightness int reinterpreted the CURRENT (possibly wrong)
+	// way, the same bytes unpacked the VANILLA way instead, the raw tint RGBA
+	// bytes, and the final colour this function is about to actually emit.
+	// Real-hardware log evidence (2026-09-24): the first sample this diagnostic
+	// captured had have=0 on both interpretations -- g_lightmapColors was still
+	// empty at that exact moment (very early in the session, before
+	// renderSetLightmapColors() had run yet), so it could not distinguish the
+	// two brightness interpretations at all. It DID confirm the tint itself is
+	// correct: tintRGBA=(121,192,90,255), exactly ColorizerGrass's real green
+	// fallback -- ruling the tint pipeline out entirely, not just "probably
+	// fine". Added the g_lightmapColors.empty() check below so this re-arms
+	// until it catches a sample where the lightmap actually has data, instead
+	// of trusting a sample that could not have shown the bug either way.
+	static bool s_dsiLoggedFirstTintedDraw = false;
+	if (!s_dsiLoggedFirstTintedDraw && mesh.hasColor && mesh.hasBrightness && mesh.vertexCount > 0
+		&& !g_lightmapColors.empty())
+	{
+		s_dsiLoggedFirstTintedDraw = true;
+		const std::uint8_t* v0 = base;
+		std::uint32_t brightnessRaw;
+		std::memcpy(&brightnessRaw, v0 + mesh.brightnessOffset, sizeof(brightnessRaw));
+		float brightnessAsTwoFloats[2];
+		std::memcpy(brightnessAsTwoFloats, v0 + mesh.brightnessOffset, sizeof(brightnessAsTwoFloats));
+		std::uint8_t tintRgba[4];
+		std::memcpy(tintRgba, v0 + mesh.colorOffset, sizeof(tintRgba));
+
+		std::uint8_t lmR = 255, lmG = 255, lmB = 255;
+		const bool haveLm = lightmapColorAt(brightnessAsTwoFloats[0], brightnessAsTwoFloats[1], lmR, lmG, lmB);
+		std::uint8_t vanillaLmR = 255, vanillaLmG = 255, vanillaLmB = 255;
+		const std::uint32_t vanillaU = brightnessRaw % 65536u;
+		const std::uint32_t vanillaV = brightnessRaw / 65536u;
+		const bool haveVanillaLm = lightmapColorAt((float)vanillaU, (float)vanillaV, vanillaLmR, vanillaLmG, vanillaLmB);
+
+		MC_LOG_WARN("dsi", "first tinted+lit draw: brightnessRaw=%u (vanillaU=%u vanillaV=%u)"
+			" asTwoFloats=(%f,%f)\n",
+			(unsigned)brightnessRaw, (unsigned)vanillaU, (unsigned)vanillaV,
+			(double)brightnessAsTwoFloats[0], (double)brightnessAsTwoFloats[1]);
+		MC_LOG_WARN("dsi", "  tintRGBA=(%d,%d,%d,%d) currentLightmapRGB=(%d,%d,%d)[have=%d]"
+			" vanillaLightmapRGB=(%d,%d,%d)[have=%d]\n",
+			tintRgba[0], tintRgba[1], tintRgba[2], tintRgba[3],
+			lmR, lmG, lmB, haveLm ? 1 : 0,
+			vanillaLmR, vanillaLmG, vanillaLmB, haveVanillaLm ? 1 : 0);
+	}
 
 	// Same translucency approximation as drawInterleavedMesh() -- see its
 	// own comment on why first+last vertex alpha is sampled, not scanned.
