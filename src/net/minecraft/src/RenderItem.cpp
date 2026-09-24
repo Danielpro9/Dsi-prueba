@@ -16,6 +16,40 @@
 #include "platform/RenderAPI.h"
 
 namespace {
+#ifdef DSI_PLATFORM
+// Real-hardware evidence (a debug.log's texture-VRAM warnings, and the user
+// separately reporting a checkerboard-patterned End Portal block icon in
+// both the creative inventory and a survival inventory that happened to
+// hold one): the real renderEndPortalGuiIcon() below binds two large,
+// purely decorative textures (misc/tunnel.png 128x128, misc/
+// particlefield.png 256x256) on top of whatever the rest of the game
+// already has resident. On this console's fixed 512KB texture-image VRAM,
+// that upload routinely loses the room it needs
+// ("paletted upload rejected: ... GPU out of texture VRAM space") and both
+// fall back to the checkerboard placeholder -- for a single block's
+// inventory icon, not worth gambling the VRAM budget on. This draws a
+// flat, untextured quad in roughly the swirl's own dark-blue tone instead:
+// recognisably distinct from every other block's icon, costs no VRAM, and
+// can never fail to "upload".
+void renderEndPortalGuiIconFlat(int x, int y, float zLevel) {
+    Tessellator *tessellator = &Tessellator::instance;
+
+    renderDisable(RenderCapability::Lighting);
+    renderDisable(RenderCapability::Texture2D);
+    renderColor4f(0.1f, 0.15f, 0.3f, 1.0f);
+
+    tessellator->startDrawingQuads();
+    tessellator->addVertex(x, y + 16, zLevel);
+    tessellator->addVertex(x + 16, y + 16, zLevel);
+    tessellator->addVertex(x + 16, y, zLevel);
+    tessellator->addVertex(x, y, zLevel);
+    tessellator->draw();
+
+    renderEnable(RenderCapability::Texture2D);
+    renderColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    renderEnable(RenderCapability::Lighting);
+}
+#else
 void renderEndPortalGuiIcon(RenderEngine *renderEngine, int x, int y, float zLevel) {
     Tessellator *tessellator = &Tessellator::instance;
 
@@ -47,6 +81,7 @@ void renderEndPortalGuiIcon(RenderEngine *renderEngine, int x, int y, float zLev
     renderDisable(RenderCapability::Blend);
     renderEnable(RenderCapability::Lighting);
 }
+#endif
 }
 
 void RenderItem::renderAABB(AxisAlignedBB *aabb)
@@ -206,7 +241,11 @@ void RenderItem::drawItemIntoGui(FontRenderer* fontrenderer, RenderEngine* rende
     }
     Item* item = Item::itemsList[i];
     if (Block::endPortal != nullptr && i == Block::endPortal->blockID) {
+#ifdef DSI_PLATFORM
+        renderEndPortalGuiIconFlat(l, i1, zLevel);
+#else
         renderEndPortalGuiIcon(renderengine, l, i1, zLevel);
+#endif
         renderEnable(RenderCapability::CullFace);
         return;
     }

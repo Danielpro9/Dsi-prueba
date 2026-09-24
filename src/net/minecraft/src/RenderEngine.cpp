@@ -85,10 +85,19 @@ static bool isTileAtlasResource(const std::string &name)
 // reason (there it was palette-colour-count pressure on a 256x256 atlas;
 // here it is this transparency bug on much smaller textures, cheap to
 // upload uncompressed either way).
+//
+// font/default.png and font/alternate.png added after the same symptom was
+// confirmed on text specifically (screenshot: every glyph with a solid
+// black box behind it, the original "black text boxes" report from early
+// this session, never actually fixed -- just not yet covered by this list).
+// Both are 128x128 with only 1-2 real colours, so the RGBA path's extra
+// bytes-per-pixel cost here is negligible next to font.png being resident
+// for the entire run regardless.
 static bool dsiNeedsRealAlphaTransparency(const std::string &name)
 {
 	const std::string path = normalizedTexturePath(name);
-	return path == "/gui/icons.png" || path == "/item/xporb.png";
+	return path == "/gui/icons.png" || path == "/item/xporb.png" ||
+		path == "/font/default.png" || path == "/font/alternate.png";
 }
 #endif
 

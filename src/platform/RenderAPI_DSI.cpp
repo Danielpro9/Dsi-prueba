@@ -143,40 +143,6 @@ void applyPolyFormatIfDirty()
 
 void markPolyDirty() { g_poly.dirty = true; }
 
-// One-shot diagnostic for the still-open "no PNG has transparency / black box
-// behind text / empty hearts" investigation, continued from the report that
-// the POLY_DECAL fix above (real, and confirmed to have fixed the menu's
-// translucent selection-highlight overlay) did NOT fix opaque textured draws
-// with per-texel cutout transparency -- font glyphs, hearts/food icons, and
-// general GUI/item textures all still show wrong. Those draws all carry
-// mesh.hasTexture && mesh.hasColor (FontRenderer's Tessellator batch calls
-// setColorRGBA_F() per glyph; GuiIngame's hearts/food icons go through the
-// same captured/interleaved path with a bound texture). This fires once, on
-// the first such draw, from wherever it is actually reached first --
-// drawInterleavedMesh() or drawCapturedMeshFast() below -- and reads back
-// GFX_CONTROL (DISP3DCNT: bit 0 = TEXTURE_2D, bit 2 = ALPHA_TEST, bit 3 =
-// BLEND) and GFX_ALPHA_TEST (the glAlphaFunc() threshold actually in effect)
-// at DRAW time, not upload time -- state that could have changed in either
-// direction since Minecraft.cpp's boot-time renderEnable(AlphaTest)/
-// renderAlphaFunc(0.1) call. If AlphaTest's bit is clear here, or the
-// threshold reads unexpectedly high, that is the next concrete lead;
-// otherwise the per-texel COLOR0_TRANSPARENT discard itself needs to be
-// questioned instead of the state driving it.
-bool s_dsiLoggedFirstTexturedColoredDraw = false;
-void dsiLogFirstTexturedColoredDrawStateOnce(bool hasTexture, bool hasColor)
-{
-	if (s_dsiLoggedFirstTexturedColoredDraw || !hasTexture || !hasColor)
-		return;
-	s_dsiLoggedFirstTexturedColoredDraw = true;
-	MC_LOG_WARN("dsi", "first textured+coloured draw (font/hearts-class): GFX_CONTROL=0x%X "
-		"(TEX2D=%d ALPHATEST=%d BLEND=%d) GFX_ALPHA_TEST=%d poly.alpha31=%d\n",
-		(unsigned)GFX_CONTROL,
-		(GFX_CONTROL & GL_TEXTURE_2D) ? 1 : 0,
-		(GFX_CONTROL & GL_ALPHA_TEST) ? 1 : 0,
-		(GFX_CONTROL & GL_BLEND) ? 1 : 0,
-		(int)GFX_ALPHA_TEST, (int)g_poly.alpha31);
-}
-
 // -----------------------------------------------------------------------------
 // Texture registry -- VERIFIED upload mechanism (glTexImageNtr2D/GL_RGBA),
 // APPROXIMATED sub-image support (see renderTextureSubImageRgba below).
@@ -633,37 +599,6 @@ bool tryUploadPaletted(int name, DsiTexture& tex, int param, bool forceRebuild)
 			if (quantShift > 0)
 				MC_LOG_WARN("dsi", "paletted upload used colour quantization (shift=%d, %u colours) to fit: %dx%d id=%d\n",
 					quantShift, (unsigned)colorCount, tex.width, tex.height, name);
-			// One-shot diagnostic for the still-open "no PNG has transparency /
-			// black box behind text / empty hearts" investigation: real-hardware
-			// evidence so far confirms this exact paletted+COLOR0_TRANSPARENT
-			// upload path IS reached (font/icons/gui.png all show as correctly-
-			// sized paletted residents, no upload failures), and the code here
-			// unconditionally ORs GL_TEXTURE_COLOR0_TRANSPARENT into every
-			// paletted upload's param -- but nothing has yet confirmed that bit
-			// actually reaches glTexImage2D() as-is (vs. e.g. being masked off
-			// by a value collision with the wrap/clamp bits already in `param`,
-			// which this function receives from its caller rather than building
-			// itself). Fires once, on this session's first successful paletted
-			// upload -- given upload order (font.png loads immediately after
-			// "FontRenderer ready", before any GUI/world texture), this is
-			// expected to be font/default.png or font/alternate.png.
-			static bool s_dsiLoggedFirstPalettedUpload = false;
-			if (!s_dsiLoggedFirstPalettedUpload)
-			{
-				s_dsiLoggedFirstPalettedUpload = true;
-				MC_LOG_WARN("dsi", "first paletted upload: %dx%d param=0x%X (COLOR0_TRANSPARENT bit %s) quantShift=%d colours=%u\n",
-					tex.width, tex.height, (unsigned)(param | GL_TEXTURE_COLOR0_TRANSPARENT),
-					((param | GL_TEXTURE_COLOR0_TRANSPARENT) & GL_TEXTURE_COLOR0_TRANSPARENT) ? "set" : "CLEAR",
-					quantShift, (unsigned)colorCount);
-				// GFX_POLY_FORMAT is deliberately not read here: it lives in the
-				// geometry engine's FIFO command window (0x040004A4), which is
-				// write-only -- reading it back would return whatever else is
-				// on that bus, not the polygon format actually in effect.
-				// GFX_CONTROL (DISP3DCNT) and GFX_ALPHA_TEST are genuine
-				// standalone control registers, safe to read back.
-				MC_LOG_WARN("dsi", "  GFX_CONTROL=0x%X GFX_ALPHA_TEST=%d\n",
-					(unsigned)GFX_CONTROL, (int)GFX_ALPHA_TEST);
-			}
 			tex.stablePalette = std::move(palette);
 			tex.stableQuantShift = quantShift;
 			return true;
@@ -932,8 +867,6 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 {
 	if (!mesh.data || mesh.count <= 0 || mesh.stride <= 0)
 		return false;
-
-	dsiLogFirstTexturedColoredDrawStateOnce(mesh.hasTexture, mesh.hasColor);
 
 	const std::uint8_t* base = static_cast<const std::uint8_t*>(mesh.data) + (std::size_t)mesh.first * mesh.stride;
 
@@ -1355,8 +1288,6 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 {
 	if (mesh.empty())
 		return false;
-
-	dsiLogFirstTexturedColoredDrawStateOnce(mesh.hasTexture, mesh.hasColor);
 
 	const std::uint8_t* base = reinterpret_cast<const std::uint8_t*>(mesh.raw.data());
 
