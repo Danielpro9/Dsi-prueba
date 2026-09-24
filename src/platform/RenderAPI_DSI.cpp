@@ -1178,26 +1178,17 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 	// caches also go through this same generic draw path but never set it, so
 	// this specifically catches the first actual block/terrain draw instead of
 	// whatever unrelated captured mesh happens to render first in a frame.
-	// Was one-shot (fired only on the very first qualifying draw). Widened to
-	// periodic: the enableLightmap()/disableLightmap() candidate fix this
-	// round restores most of their pre-investigation side effects (texture
-	// matrix touch, Texture2D toggle, colour reset) while still skipping the
-	// one confirmed-wrong step (rebinding a stray 16x16 lightmap texture over
-	// terrain.png). If ANYTHING later in a session still lets that -- or some
-	// other bind -- slip through onto terrain, a one-shot check at the very
-	// first draw would miss it entirely; this keeps watching for the whole
-	// session instead of trusting the first sample.
-	static unsigned int s_dsiTexturedDrawDiagTick = 0;
-	if (mesh.hasTexture && mesh.hasBrightness && mesh.vertexCount > 0 && (s_dsiTexturedDrawDiagTick++ % 180) == 0)
+	static bool s_dsiLoggedFirstTexturedDraw = false;
+	if (!s_dsiLoggedFirstTexturedDraw && mesh.hasTexture && mesh.hasBrightness && mesh.vertexCount > 0)
 	{
+		s_dsiLoggedFirstTexturedDraw = true;
 		float uvFirst[2] = { -1.0f, -1.0f };
 		std::memcpy(uvFirst, base + mesh.texCoordOffset, sizeof(uvFirst));
 		float uvLast[2] = { -1.0f, -1.0f };
 		if (mesh.vertexCount > 1)
 			std::memcpy(uvLast, base + (std::size_t)(mesh.vertexCount - 1) * mesh.stride + mesh.texCoordOffset, sizeof(uvLast));
 		const DsiTexture* boundTex = textureSlot(g_boundTexture);
-		MC_LOG_WARN("dsi", "textured captured draw #%u: boundTex=%d allocated=%d paletted=%d texW=%d texH=%d\n",
-			s_dsiTexturedDrawDiagTick,
+		MC_LOG_WARN("dsi", "first textured captured draw: boundTex=%d allocated=%d paletted=%d texW=%d texH=%d\n",
 			g_boundTexture,
 			boundTex ? (boundTex->allocated ? 1 : 0) : -1,
 			boundTex ? (boundTex->paletted ? 1 : 0) : -1,
@@ -1206,29 +1197,63 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 		MC_LOG_WARN("dsi", "  vertexCount=%d stride=%d texCoordOffset=%d firstUV=(%f,%f) lastUV=(%f,%f)\n",
 			mesh.vertexCount, mesh.stride, mesh.texCoordOffset,
 			(double)uvFirst[0], (double)uvFirst[1], (double)uvLast[0], (double)uvLast[1]);
+	}
 
-		// Read back the ACTUAL GPU modelview matrix at this exact draw call,
-		// via the engine's own renderGetMatrix() (glGetFixed(GL_GET_MATRIX_
-		// POSITION, ...) under the hood -- already wired up for other callers,
-		// see this file's renderGetMatrix()). Every CPU-side check this session
-		// (WorldRenderer's own posX/posY/posZ, needsUpdate, isInFrustum,
-		// hasPublishedTerrain) came back correct; this instead asks what
-		// translation the GPU is ACTUALLY about to draw this mesh with. In a
-		// standard affine 4x4 (row [0,0,0,1] last), the translation lives in
-		// elements 12/13/14 regardless of row- or column-major storage, since
-		// that is the only place a translate-only component can appear for a
-		// matrix built by composing rotations with glTranslatef calls. If
-		// RenderList::render()'s (originX - viewerX) + drawCapturedTerrain()'s
-		// posXClip translate really do net out to "sectionX - viewerX" as read
-		// from the code, these three numbers should be small (within the
-		// section's own ~16-block size) whenever the section being drawn is
-		// the one right around the player -- if they are instead huge, that is
-		// direct, undeniable proof the GPU-side translate is wrong even though
-		// every CPU-side flag says it should not be.
-		float mv[16];
-		renderGetMatrix(RenderMatrixQuery::ModelView, mv);
-		MC_LOG_WARN("dsi", "  gpu modelview translate=(%f,%f,%f)\n",
-			(double)mv[12], (double)mv[13], (double)mv[14]);
+	// One-shot diagnostic chasing a NEW real-hardware report (2026-09-24, after
+	// the enableLightmap/disableLightmap fix above was confirmed to have solved
+	// the "no texture at all" bug): grass tops and leaves render as flat grey
+	// instead of biome-tinted green. Extensive reading of the shared tint
+	// pipeline (CustomColorizer::getColorMultiplier(), RenderBlocks.cpp's
+	// renderStandardBlock()/renderStandardBlockWithColorMultiplier(), the
+	// ColorizerGrass fallback) found nothing DSi-specific or platform-gated --
+	// every one of those runs identically on every platform. The one structural
+	// oddity found on THIS side: this file's hasBrightness handling below reads
+	// mesh.brightnessOffset as two consecutive 32-bit floats (8 bytes), but
+	// Tessellator::addVertex() (Tessellator.cpp) only ever writes ONE packed
+	// int there (rawBuffer[+7] = brightness, the vanilla `skylight<<20 |
+	// blocklight<<4`-shaped value every other platform unpacks via
+	// `brightness % 65536` / `brightness / 65536`, e.g. RenderManager.cpp,
+	// RenderPainting.cpp, TileEntityRenderer.cpp all do this same split) --
+	// meaning the second "float" read here is 4 bytes past that single packed
+	// int, into the START of the NEXT vertex's position data. Whether that
+	// actually explains the grey tint (values reinterpreted as float bit
+	// patterns, then clamped, could plausibly land on a near-constant lightmap
+	// corner) is unconfirmed -- general terrain lighting still looks broadly
+	// correct in every screenshot so far, which this theory does not cleanly
+	// explain either. Rather than guess further, log the raw bytes directly:
+	// the first vertex of the first mesh that carries BOTH a tint colour and
+	// brightness (i.e. an actual grass-top or leaf face, not a plain block)
+	// -- the packed brightness int reinterpreted the CURRENT (possibly wrong)
+	// way, the same bytes unpacked the VANILLA way instead, the raw tint RGBA
+	// bytes, and the final colour this function is about to actually emit.
+	static bool s_dsiLoggedFirstTintedDraw = false;
+	if (!s_dsiLoggedFirstTintedDraw && mesh.hasColor && mesh.hasBrightness && mesh.vertexCount > 0)
+	{
+		s_dsiLoggedFirstTintedDraw = true;
+		const std::uint8_t* v0 = base;
+		std::uint32_t brightnessRaw;
+		std::memcpy(&brightnessRaw, v0 + mesh.brightnessOffset, sizeof(brightnessRaw));
+		float brightnessAsTwoFloats[2];
+		std::memcpy(brightnessAsTwoFloats, v0 + mesh.brightnessOffset, sizeof(brightnessAsTwoFloats));
+		std::uint8_t tintRgba[4];
+		std::memcpy(tintRgba, v0 + mesh.colorOffset, sizeof(tintRgba));
+
+		std::uint8_t lmR = 255, lmG = 255, lmB = 255;
+		const bool haveLm = lightmapColorAt(brightnessAsTwoFloats[0], brightnessAsTwoFloats[1], lmR, lmG, lmB);
+		std::uint8_t vanillaLmR = 255, vanillaLmG = 255, vanillaLmB = 255;
+		const std::uint32_t vanillaU = brightnessRaw % 65536u;
+		const std::uint32_t vanillaV = brightnessRaw / 65536u;
+		const bool haveVanillaLm = lightmapColorAt((float)vanillaU, (float)vanillaV, vanillaLmR, vanillaLmG, vanillaLmB);
+
+		MC_LOG_WARN("dsi", "first tinted+lit draw: brightnessRaw=%u (vanillaU=%u vanillaV=%u)"
+			" asTwoFloats=(%f,%f)\n",
+			(unsigned)brightnessRaw, (unsigned)vanillaU, (unsigned)vanillaV,
+			(double)brightnessAsTwoFloats[0], (double)brightnessAsTwoFloats[1]);
+		MC_LOG_WARN("dsi", "  tintRGBA=(%d,%d,%d,%d) currentLightmapRGB=(%d,%d,%d)[have=%d]"
+			" vanillaLightmapRGB=(%d,%d,%d)[have=%d]\n",
+			tintRgba[0], tintRgba[1], tintRgba[2], tintRgba[3],
+			lmR, lmG, lmB, haveLm ? 1 : 0,
+			vanillaLmR, vanillaLmG, vanillaLmB, haveVanillaLm ? 1 : 0);
 	}
 
 	// Same translucency approximation as drawInterleavedMesh() -- see its
