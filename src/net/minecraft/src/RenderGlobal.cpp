@@ -2931,6 +2931,31 @@ void RenderGlobal::markRenderersInRange(int_t i, int_t j, int_t k, int_t l, int_
 				{
 					enqueueRendererUpdate(worldrenderer);
 					worldrenderer->markDirty();
+#if PLATFORM_DSI
+					// Chasing the "I place a block at my feet and it renders far
+					// away" report. The periodic per-frame diag in sortAndRender()/
+					// renderSortedRenderers() (this file) showed drawn distances in
+					// a plausible-looking 3-27 block range -- not the smoking gun
+					// expected -- but that diag samples once every ~2s, so it is
+					// very unlikely to land on the exact frame a specific edit was
+					// made. Log every edit-triggered dirty mark directly instead,
+					// unthrottled (edits are rare enough this session not to flood
+					// the log): the player's position at the moment of the edit and
+					// the ORIGIN of the WorldRenderer section markRenderersInRange's
+					// grid-index lookup (k4 above) resolved to. If that origin does
+					// not actually contain the player/edited block, the aliasing is
+					// in this grid lookup itself, not in the draw/translate path
+					// already inspected and found correct on reading.
+					if (mc != nullptr && mc->renderViewEntity != nullptr)
+					{
+						EntityLiving *editViewer = mc->renderViewEntity;
+						MC_LOG_INFO("dsi", "edit mark: player=(%.1f,%.1f,%.1f)"
+							" sectionOrigin=(%d,%d,%d) sectionSize=(%d,%d,%d)\n",
+							(double)editViewer->posX, (double)editViewer->posY, (double)editViewer->posZ,
+							(int)worldrenderer->posX, (int)worldrenderer->posY, (int)worldrenderer->posZ,
+							(int)worldrenderer->sizeWidth, (int)worldrenderer->sizeHeight, (int)worldrenderer->sizeDepth);
+					}
+#endif
 				}
 #endif
 			}
