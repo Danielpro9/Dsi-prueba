@@ -346,6 +346,92 @@ namespace
 {
 int g_dsiLastDecodedWidth = 0;
 int g_dsiLastDecodedHeight = 0;
+
+// DSi only, terrain.png only (for now -- see the caller): the atlas's real-
+// quality upload was confirmed failing for want of room in the console's
+// fixed 512KB texture-image VRAM budget (RenderAPI_DSI.cpp's vram=
+// diagnostic showed it landing on the heavily colour-quantized paletted
+// fallback instead -- 61 colours for the whole 256x256 atlas). Halving the
+// DECODED image here, before it ever reaches setupTexture(), is a different
+// lever than fighting for VRAM room: 256x256 -> 128x128 is a straight 4x
+// byte reduction at whatever format it ends up uploaded in, and this runs
+// once per load (world entry, texture pack switch), not per frame.
+//
+// Safe specifically because of how this engine already supports different-
+// resolution texture packs: Config::setIconWidthTerrain(image->getWidth()/16),
+// called right after this at this same call site, is what tells
+// uploadTextureFxTile() (this file) how big to resample each animated
+// tile's content to and where to place it -- that function already
+// resamples unconditionally to whatever that value is, so an 8-per-tile
+// atlas gets exactly the same correct treatment a real 8x8-resolution
+// texture pack already would. Every UV lookup elsewhere in the renderer is
+// a fraction of the atlas (tileIndex/16), independent of its actual pixel
+// size. A clean halving keeps the 16x16 TILE GRID identical -- only the
+// pixels per tile shrink -- so none of that machinery needs to change.
+//
+// Only takes a clean, exactly-halvable source (even width/height): if a
+// texture pack ever ships something that is not, this returns it untouched
+// rather than guess at an uneven split.
+std::unique_ptr<BufferedImage> dsiDownscaleAtlasHalf(std::unique_ptr<BufferedImage> image)
+{
+	if (!image)
+		return image;
+	const int_t sourceWidth = image->getWidth();
+	const int_t sourceHeight = image->getHeight();
+	if (sourceWidth < 2 || sourceHeight < 2 || (sourceWidth & 1) != 0 || (sourceHeight & 1) != 0)
+		return image;
+
+	const int_t targetWidth = sourceWidth / 2;
+	const int_t targetHeight = sourceHeight / 2;
+	const unsigned char *src = image->getRawPixels();
+	std::unique_ptr<unsigned char[]> dst(
+		new unsigned char[BufferedImage::checkedRgbaByteCount(targetWidth, targetHeight)]);
+
+	for (int_t y = 0; y < targetHeight; ++y)
+	{
+		for (int_t x = 0; x < targetWidth; ++x)
+		{
+			// 2x2 box average, weighted by each source texel's own alpha so a
+			// cutout texture's (leaves, glass, ...) fully-transparent texels --
+			// whose RGB is frequently undefined/stale -- do not darken the
+			// surviving edge colour. Falls back to black/transparent only when
+			// the whole 2x2 block is fully transparent, where the result is
+			// invisible either way.
+			unsigned int r = 0, g = 0, b = 0, a = 0, weight = 0;
+			for (int_t dy = 0; dy < 2; ++dy)
+			{
+				for (int_t dx = 0; dx < 2; ++dx)
+				{
+					const std::size_t idx = (static_cast<std::size_t>(y * 2 + dy) * static_cast<std::size_t>(sourceWidth) +
+						static_cast<std::size_t>(x * 2 + dx)) * 4u;
+					const unsigned int sa = src[idx + 3];
+					r += static_cast<unsigned int>(src[idx + 0]) * sa;
+					g += static_cast<unsigned int>(src[idx + 1]) * sa;
+					b += static_cast<unsigned int>(src[idx + 2]) * sa;
+					a += sa;
+					weight += sa;
+				}
+			}
+			const std::size_t out = (static_cast<std::size_t>(y) * static_cast<std::size_t>(targetWidth) +
+				static_cast<std::size_t>(x)) * 4u;
+			if (weight > 0)
+			{
+				dst[out + 0] = static_cast<unsigned char>(r / weight);
+				dst[out + 1] = static_cast<unsigned char>(g / weight);
+				dst[out + 2] = static_cast<unsigned char>(b / weight);
+			}
+			else
+			{
+				dst[out + 0] = 0;
+				dst[out + 1] = 0;
+				dst[out + 2] = 0;
+			}
+			dst[out + 3] = static_cast<unsigned char>(a / 4u);
+		}
+	}
+
+	return std::unique_ptr<BufferedImage>(new BufferedImage(targetWidth, targetHeight, std::move(dst)));
+}
 }
 #endif
 
@@ -377,6 +463,14 @@ bool RenderEngine::loadTextureStreamInto(const std::string &s, int_t texture, st
 
 		const std::string normalizedPath = normalizedTexturePath(s);
 		image = legacyPreparePanoramaForUpload(normalizedPath, std::move(image));
+#if PLATFORM_DSI
+		// terrain.png only for now -- see dsiDownscaleAtlasHalf()'s own
+		// comment for the full why and why this is safe. gui/items.png is
+		// the same shape of problem but not attempted yet: confirm this one
+		// first before widening scope.
+		if (normalizedPath == "/terrain.png")
+			image = dsiDownscaleAtlasHalf(std::move(image));
+#endif
 #ifdef WII_PLATFORM
 		// Bring-up diagnostic. getTexture swallows every failure into
 		// missingTextureImage via the catch below, so a texture that silently
@@ -401,11 +495,14 @@ bool RenderEngine::loadTextureStreamInto(const std::string &s, int_t texture, st
 		loaded = (bool)image;
 #if PLATFORM_DSI
 		// Captured so getTexture()'s upload-failure warning below can name the
-		// actual pixel dimensions, not just the resource path. Tile atlases
-		// (terrain.png, gui/items.png) can't get the panorama/title/logo
-		// bilinear-resize treatment above -- their UV math depends on exact
-		// pixel positions -- so knowing the real size they shipped at is the
-		// next thing needed to fix them correctly instead of guessing.
+		// actual pixel dimensions, not just the resource path -- this now
+		// reflects terrain.png's post-downscale size (128x128), the size that
+		// actually reaches setupTexture()/uploadTexture(), not its on-SD-card
+		// size. Tile atlases still can't get the panorama/title/logo
+		// bilinear-resize treatment above -- that one targets an arbitrary
+		// non-tile-aligned size and would blur across tile boundaries -- but
+		// terrain.png gets its own purpose-built halving above instead
+		// (dsiDownscaleAtlasHalf(), a clean divisor of the 16x16 tile grid).
 		g_dsiLastDecodedWidth = image ? image->getWidth() : 0;
 		g_dsiLastDecodedHeight = image ? image->getHeight() : 0;
 #endif
