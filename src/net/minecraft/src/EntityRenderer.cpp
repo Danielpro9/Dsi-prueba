@@ -537,9 +537,27 @@ void EntityRenderer::updateLightmap()
 
 void EntityRenderer::disableLightmap(double)
 {
+#if defined(DSI_PLATFORM)
+    // See enableLightmap()'s own DSi comment below for the real-hardware bug
+    // this and that function together caused. DSi has exactly one texture
+    // unit (RenderAPI_DSI.cpp's renderSetActiveTextureUnit(): "DS has one
+    // texture unit; remembered only so renderSetMultiTextureCoord..."), so
+    // this function's real-hardware assumption of a SEPARATE lightmap
+    // texture unit does not hold on this backend: renderDisable(Texture2D)
+    // is a real, global glDisable(GL_TEXTURE_2D) here (RenderAPI_DSI.cpp's
+    // Texture2D case), and nothing in this function re-enables it -- every
+    // draw after the first call to this, in the entire game, would have run
+    // with texturing globally OFF until something else happened to turn it
+    // back on. DSi's lightmap is baked into per-vertex colour at draw time
+    // instead (RenderAPI_DSI.cpp's applyLightmapColorAt()/
+    // drawInterleavedMesh() combine logic) -- there is no second texture
+    // stage to disable here, so this is a no-op.
+    return;
+#else
     OpenGlHelper::setActiveTexture(OpenGlHelper::lightmapTexUnit);
     renderDisable(RenderCapability::Texture2D);
     OpenGlHelper::setActiveTexture(OpenGlHelper::defaultTexUnit);
+#endif
 }
 
 void EntityRenderer::enableLightmap(double)
@@ -548,6 +566,27 @@ void EntityRenderer::enableLightmap(double)
     OpenGlHelper::setActiveTexture(OpenGlHelper::lightmapTexUnit);
     renderEnable(RenderCapability::Texture2D);
     OpenGlHelper::setActiveTexture(OpenGlHelper::defaultTexUnit);
+#elif defined(DSI_PLATFORM)
+    // Real-hardware confirmation (a one-shot diagnostic added specifically
+    // to chase this, RenderAPI_DSI.cpp's drawCapturedMeshFast()): the very
+    // first terrain section drawn each session showed a 16x16 texture bound
+    // -- the desktop lightmap's own size -- instead of terrain.png, which
+    // renderTerrainBeginPass() had just correctly bound moments earlier in
+    // EntityRenderer.cpp's renderWorld(). Root cause: this function's
+    // non-PS2 branch below calls mc->renderEngine->bindTexture(lightmapTexture)
+    // unconditionally, written for hardware with a real second texture unit
+    // (OpenGlHelper::lightmapTexUnit) to isolate that bind into. DSi has
+    // only one texture unit (see disableLightmap()'s own comment above), so
+    // that bind landed on the exact same g_boundTexture everything else
+    // uses, silently replacing terrain.png right before
+    // RenderGlobal.cpp's renderAllRenderLists() (which calls this,
+    // immediately before drawing every visible chunk section) -- every
+    // block in every session this port has run showed its flat per-vertex
+    // colour and no texture pattern for exactly this reason, regardless of
+    // VRAM state. DSi's lightmap is baked into per-vertex colour instead --
+    // there is nothing to bind here, the same shape of fix PS2's own branch
+    // above already is (it never calls bindTexture on this path either).
+    return;
 #else
     if (lightmapTexture < 0)
         return;
