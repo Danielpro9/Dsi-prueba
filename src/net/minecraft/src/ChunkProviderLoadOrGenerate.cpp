@@ -523,10 +523,39 @@ bool ChunkProviderLoadOrGenerate::unload100OldestChunks()
     for (auto it = chunks.begin(); it != chunks.end(); )
     {
         Chunk *chunk = it->second;
-        if (chunk == nullptr || chunk == blankChunk)
+        if (chunk == nullptr)
         {
             it = chunks.erase(it);
             markChunkTopologyChanged();
+            continue;
+        }
+        if (chunk == blankChunk)
+        {
+            // Mirrors the identical fix in ChunkProvider.cpp's own unload sweep --
+            // see its comment for the full real-hardware evidence chain. This tier
+            // has the same bug: prepareChunkInternal()'s readFailed branch caches
+            // blankChunk at a position specifically so it is never retried, but
+            // this loop used to erase EVERY blankChunk entry unconditionally,
+            // every call, with no distance check -- silently undoing that caching
+            // for a corrupt chunk sitting inside the load radius and reproducing
+            // the "refusing to regenerate" log (and its sync=1/commit=1 SD-write
+            // cost) every tick, forever. blankChunk is one shared sentinel reused
+            // at every failed/placeholder position, so its own xPosition/zPosition
+            // are not meaningful here -- decode the position this entry actually
+            // lives at from its key instead, and keep the same distance gate real
+            // chunks use below: still prune it once it is outside the unload
+            // radius, just not unconditionally every tick while still near it.
+            const int_t entryX = static_cast<int_t>(static_cast<std::int32_t>(it->first >> 32));
+            const int_t entryZ = static_cast<int_t>(static_cast<std::int32_t>(it->first & 0xffffffffu));
+            if (!isOutsideUnloadRadius(entryX, entryZ))
+            {
+                ++it;
+                continue;
+            }
+            it = chunks.erase(it);
+            markChunkTopologyChanged();
+            if (chunksOutsideRadius > 0)
+                chunksOutsideRadius--;
             continue;
         }
 

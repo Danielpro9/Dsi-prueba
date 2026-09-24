@@ -1481,11 +1481,50 @@ bool ChunkProvider::unload100OldestChunks()
 	for (auto it = chunkMap.begin(); it != chunkMap.end() && unloaded < unloadLimit; )
 	{
 		Chunk *chunk = it->second;
-		if (chunk == nullptr || chunk == blankChunk)
+		if (chunk == nullptr)
 		{
 			it = chunkMap.erase(it);
 			markChunkTopologyChanged();
 			chunkList.erase(std::remove(chunkList.begin(), chunkList.end(), chunk), chunkList.end());
+			continue;
+		}
+		if (chunk == blankChunk)
+		{
+			// Real-hardware evidence (2026-09-24): a chunk whose region-file entry
+			// is corrupt gets prepareChunkInternal()'s readFailed branch, which
+			// logs "refusing to regenerate unreadable chunk" and caches blankChunk
+			// at that key specifically so the position is never retried -- see its
+			// own comment. This loop used to erase EVERY blankChunk entry
+			// unconditionally, every single tick, regardless of distance or the
+			// unload budget above (no isOutsideUnloadRadius check, doesn't even
+			// count toward `unloaded`). For a position inside the load radius --
+			// exactly where a corrupt chunk near the player or spawn sits -- that
+			// silently undid the caching the very same tick it was written:
+			// next tick's chunk request found nothing in chunkMap, re-ran the
+			// full failed load, and re-logged the error, forever. A real-hardware
+			// log showed this exact cycle: the same handful of positions logging
+			// "refusing to regenerate" every tick, which (with sync=1/commit=1
+			// logging forcing a blocking SD write per line) is also a real,
+			// self-inflicted performance cost. blankChunk's own xPosition/
+			// zPosition are not meaningful here -- it is one shared sentinel
+			// object reused at every failed/placeholder position, not a real
+			// per-chunk object -- so decode the key this entry actually lives at
+			// instead, and keep the same distance gate real chunks use: still
+			// prune it immediately once it drifts outside the unload radius
+			// (unbounded growth stays bounded, same as before), but stop wiping
+			// it every tick while it is still near the player.
+			const int_t entryX = static_cast<int_t>(static_cast<std::int32_t>(it->first >> 32));
+			const int_t entryZ = static_cast<int_t>(static_cast<std::int32_t>(it->first & 0xffffffffu));
+			if (!isOutsideUnloadRadius(entryX, entryZ))
+			{
+				++it;
+				continue;
+			}
+			it = chunkMap.erase(it);
+			markChunkTopologyChanged();
+			chunkList.erase(std::remove(chunkList.begin(), chunkList.end(), chunk), chunkList.end());
+			if (chunksOutsideRadius > 0)
+				chunksOutsideRadius--;
 			continue;
 		}
 

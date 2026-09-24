@@ -1226,8 +1226,19 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 	// -- the packed brightness int reinterpreted the CURRENT (possibly wrong)
 	// way, the same bytes unpacked the VANILLA way instead, the raw tint RGBA
 	// bytes, and the final colour this function is about to actually emit.
+	// Real-hardware log evidence (2026-09-24): the first sample this diagnostic
+	// captured had have=0 on both interpretations -- g_lightmapColors was still
+	// empty at that exact moment (very early in the session, before
+	// renderSetLightmapColors() had run yet), so it could not distinguish the
+	// two brightness interpretations at all. It DID confirm the tint itself is
+	// correct: tintRGBA=(121,192,90,255), exactly ColorizerGrass's real green
+	// fallback -- ruling the tint pipeline out entirely, not just "probably
+	// fine". Added the g_lightmapColors.empty() check below so this re-arms
+	// until it catches a sample where the lightmap actually has data, instead
+	// of trusting a sample that could not have shown the bug either way.
 	static bool s_dsiLoggedFirstTintedDraw = false;
-	if (!s_dsiLoggedFirstTintedDraw && mesh.hasColor && mesh.hasBrightness && mesh.vertexCount > 0)
+	if (!s_dsiLoggedFirstTintedDraw && mesh.hasColor && mesh.hasBrightness && mesh.vertexCount > 0
+		&& !g_lightmapColors.empty())
 	{
 		s_dsiLoggedFirstTintedDraw = true;
 		const std::uint8_t* v0 = base;
