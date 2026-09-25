@@ -2,6 +2,7 @@
 
 #include "platform/RenderTerrainAPI.h"
 #include "platform/RenderAPI.h"
+#include "dsi/render/DsiGreedyMesh.h"
 
 // Same shape as RenderTerrainAPI_PC.cpp/RenderTerrainAPI_GL.cpp: PLATFORM_
 // NATIVE_TERRAIN_PIPELINE is Wii-only (see PlatformConfig.h), so DSi -- like
@@ -47,7 +48,17 @@ int_t renderTerrainCacheOpaqueVertexCount(const RenderTerrainBackendCache&) { re
 const void* renderTerrainCacheFaceGroups(const RenderTerrainBackendCache&) { return nullptr; }
 const void* renderTerrainCacheOpaqueMesh(const RenderTerrainBackendCache&) { return nullptr; }
 
-bool renderTerrainIsGreedyCube(Block*) { return false; }
-bool renderTerrainGreedyMeshFace(ChunkCache&, int, int, int, int, int, int, int) { return false; }
+// Forwards to DsiGreedyMesh.cpp -- the actual port of PS2's proven greedy
+// mesher (see that file's header comment for the one deliberate deviation,
+// merged-quad UV not scaling with width/height, and why). WorldRendererDsi.cpp
+// calls these through this same generic RenderTerrainAPI.h pair PS2's own
+// RenderTerrainAPI_GS_PS2.cpp forwards through, rather than calling
+// DsiGreedyMesh.cpp directly, so both platforms' terrain builders share one
+// call shape.
+bool renderTerrainIsGreedyCube(Block* block) { return dsi_is_greedy_cube(block); }
+bool renderTerrainGreedyMeshFace(ChunkCache& cache, int face, int x0, int y0, int z0, int x1, int y1, int z1)
+{
+	return dsi_greedy_mesh_face(cache, face, x0, y0, z0, x1, y1, z1);
+}
 
 #endif // DSI_PLATFORM

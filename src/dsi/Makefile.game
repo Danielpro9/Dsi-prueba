@@ -32,7 +32,7 @@ NAME		:= OptiCraftDsi
 # shadow headers -- mutex/thread/condition_variable have no extension, so
 # find -name "*.c"/"*.cpp" below never matches them; they still only feed
 # INCLUDEDIRS as before.
-SOURCEDIRS	:= ../client ../java ../net ../util ../platform ../external system lwjgl java minecraft compat
+SOURCEDIRS	:= ../client ../java ../net ../util ../platform ../external system lwjgl java minecraft render compat
 # "compat" first: for #include <...>, -I directories are searched in the
 # order given, before the compiler's own built-in system headers either way,
 # but listing it first here keeps that precedence obvious at a glance.

@@ -33,26 +33,33 @@
 // machine gives it below -- DSi genuinely has no working std::thread (see
 // src/dsi/compat's shims), and nothing in this build is a background job.
 // This file's structure mirrors src/wii/minecraft/WorldRendererWii.cpp
-// closely for that reason (the simpler of the two incremental builders --
-// PS2's also does greedy face merging and VU0 face-sorted publish, which are
-// GS/VU-specific optimisations this port does not attempt to reproduce on the
-// DS 3D engine).
+// closely for that reason (the simpler of the two incremental builders).
+//
+// PS2's greedy face merging IS reproduced here (dsiBuildRendererStep()'s
+// PLATFORM_ENABLE_GREEDY_MESH-guarded block, forwarding through
+// platform/RenderTerrainAPI.h to src/dsi/render/DsiGreedyMesh.cpp -- a port of
+// src/ps2/render/Ps2GreedyMesh.cpp with one deliberate deviation, covered in
+// that file's own header comment: DSi's version does not scale a merged
+// quad's UV span by width/height, because the DS 3D engine has no hardware
+// region-repeat wrap to tile a scaled span against the way the PS2 GS does.
+// PS2's VU0 face-sorted publish is still not reproduced -- that is a
+// GS/VU-specific optimisation with no DS 3D engine equivalent.
 //
 // Deliberately NOT reproduced from PS2/Wii (documented simplifications, not
 // oversights):
 //   * Wii's WiiBlockRenderInfo / renderSimpleOpaqueCubeWii fast opaque-cube
-//     path, and PS2's greedy-meshing/VU0 face sort. Both are throughput
-//     optimisations layered on top of the same renderBlockByRenderType() this
-//     file calls for every block; correctness does not depend on them, and
-//     nothing about the DS 3D engine specifically needs them. PLATFORM_
-//     FAST_SIMPLE_CUBE_RENDER/PLATFORM_SKIP_ENCLOSED_OPAQUE_CUBES/PLATFORM_
-//     MESH_FACE_SORT are inherited from PS2's tuning table for DSi, but the
-//     generic RenderStaticMesh path this file uses has no per-face-direction
-//     replay to hand a face sort's output to (that is PLATFORM_NATIVE_
-//     TERRAIN_PIPELINE, Wii-only), so face sorting would only reorder vertices
-//     with no way to exploit the order at draw time. A real profile once this
-//     runs on hardware is what should decide whether the opaque fast-cube path
-//     is worth porting.
+//     path. A throughput optimisation layered on top of the same
+//     renderBlockByRenderType() this file calls for every non-greedy block;
+//     correctness does not depend on it, and nothing about the DS 3D engine
+//     specifically needs it. PLATFORM_FAST_SIMPLE_CUBE_RENDER/PLATFORM_SKIP_
+//     ENCLOSED_OPAQUE_CUBES/PLATFORM_MESH_FACE_SORT are inherited from PS2's
+//     tuning table for DSi, but the generic RenderStaticMesh path this file
+//     uses has no per-face-direction replay to hand a face sort's output to
+//     (that is PLATFORM_NATIVE_TERRAIN_PIPELINE, Wii-only), so face sorting
+//     would only reorder vertices with no way to exploit the order at draw
+//     time. A real profile once this runs on hardware is what should decide
+//     whether the opaque fast-cube path is worth porting on top of greedy
+//     meshing.
 //   * Wii's alpha-test-aware early-depth batching in RenderList (submitting
 //     opaque-and-not-alpha-tested sections before the rest so GX can reject
 //     fragments before texturing). src/dsi/minecraft/RenderList.cpp submits
@@ -81,6 +88,8 @@
 #include "net/minecraft/src/ChunkCache.h"
 #include "net/minecraft/src/TileEntity.h"
 #include "net/minecraft/src/TileEntityRenderer.h"
+#include "net/minecraft/src/Config.h"
+#include "platform/RenderTerrainAPI.h"
 #include "dsi/minecraft/DsiCapturedMeshRepack.h"
 
 #include <algorithm>
@@ -117,6 +126,8 @@ void WorldRenderer::dsiResetBuildState()
 	dsiBuildSourceAvailabilityValid = false;
 	dsiBuildPass = 0;
 	dsiBuildCursor = 0;
+	dsiBuildGreedyFace = 0;
+	dsiBuildGreedySlice = 0;
 	dsiBuildHasPass1 = false;
 	dsiBuildChunkLit = false;
 	dsiBuildDirtyDuringBuild = false;
@@ -253,6 +264,62 @@ bool WorldRenderer::dsiBuildRendererStep(int_t blockBudget)
 		tessellator->setTranslationD(-(double)posX, -(double)posY, -(double)posZ);
 
 		bool stepDrew = false;
+#if PLATFORM_ENABLE_GREEDY_MESH
+		// Greedy pass: a bounded run of independent planes from one face
+		// direction per build step, not all six directions at once -- mirrors
+		// WorldRendererPs2.cpp's own identically-shaped guard (see its comment
+		// there on why: the whole-section-in-one-step version is what produced
+		// PS2's original build-time spikes). A plane lies on exactly one face
+		// direction's slice, so planes can never merge across directions, which
+		// is what makes slicing safe to pause/resume without ever re-emitting
+		// or skipping a merge. DsiGreedyMesh.cpp's own header comment covers
+		// the one deviation from PS2's version (merged-quad UV does not scale
+		// with width/height -- no DS hardware region-repeat to tile against).
+		//
+		// Config::isConnectedTextures()/isNaturalTextures() mirror PS2's own
+		// allowOptiFineGreedyMesh guard: both features vary a block's texture
+		// per-neighbour/per-position, which the greedy pass's FaceKey (one
+		// texture id per merged run) cannot represent.
+		const bool dsiAllowGreedyMesh = !Config::isConnectedTextures() && !Config::isNaturalTextures();
+		if (dsiAllowGreedyMesh && dsiBuildPass == 0 && dsiBuildGreedyFace < RENDER_TERRAIN_GREEDY_FACE_COUNT)
+		{
+			const int_t slicesPerStep = DSI_GREEDY_SLICES_PER_STEP < 1 ? 1 :
+				(DSI_GREEDY_SLICES_PER_STEP > 16 ? 16 : DSI_GREEDY_SLICES_PER_STEP);
+			const int_t sliceBegin = dsiBuildGreedySlice;
+			int_t sliceEnd = sliceBegin + slicesPerStep;
+			if (sliceEnd > 16)
+				sliceEnd = 16;
+
+			int_t greedyX0 = x0, greedyY0 = y0, greedyZ0 = z0;
+			int_t greedyX1 = x1, greedyY1 = y1, greedyZ1 = z1;
+			if (dsiBuildGreedyFace <= 1)
+			{
+				greedyY0 = y0 + sliceBegin;
+				greedyY1 = y0 + sliceEnd;
+			}
+			else if (dsiBuildGreedyFace <= 3)
+			{
+				greedyZ0 = z0 + sliceBegin;
+				greedyZ1 = z0 + sliceEnd;
+			}
+			else
+			{
+				greedyX0 = x0 + sliceBegin;
+				greedyX1 = x0 + sliceEnd;
+			}
+
+			stepDrew |= renderTerrainGreedyMeshFace(chunkcache, (int)dsiBuildGreedyFace,
+				(int)greedyX0, (int)greedyY0, (int)greedyZ0, (int)greedyX1, (int)greedyY1, (int)greedyZ1);
+
+			dsiBuildGreedySlice = sliceEnd;
+			if (dsiBuildGreedySlice >= 16)
+			{
+				dsiBuildGreedySlice = 0;
+				dsiBuildGreedyFace++;
+			}
+		}
+		else
+#endif
 		while (dsiBuildCursor < totalBlocks && processed < blockBudget)
 		{
 			const int_t cursor = dsiBuildCursor++;
@@ -268,6 +335,16 @@ bool WorldRenderer::dsiBuildRendererStep(int_t blockBudget)
 			const int_t id = chunkcache.getBlockId(x, y, z);
 			if (id > 0)
 			{
+				Block *block = Block::blocksList[id];
+				if (block == nullptr)
+					continue;
+
+#if PLATFORM_ENABLE_GREEDY_MESH
+				// Already emitted by the greedy pass above for the opaque pass.
+				if (dsiAllowGreedyMesh && dsiBuildPass == 0 && renderTerrainIsGreedyCube(block))
+					continue;
+#endif
+
 				if (dsiBuildPass == 0 && Block::isBlockContainer[id])
 				{
 					TileEntity *te = chunkcache.getBlockTileEntity(x, y, z);
@@ -275,10 +352,6 @@ bool WorldRenderer::dsiBuildRendererStep(int_t blockBudget)
 						std::find(dsiBuildTileEntityRenderers.begin(), dsiBuildTileEntityRenderers.end(), te) == dsiBuildTileEntityRenderers.end())
 						dsiBuildTileEntityRenderers.push_back(te);
 				}
-
-				Block *block = Block::blocksList[id];
-				if (block == nullptr)
-					continue;
 
 				const int_t blockPass = block->getRenderBlockPass();
 				if (dsiBuildPass == 0 && blockPass != 0)

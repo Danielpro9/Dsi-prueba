@@ -204,6 +204,8 @@ WorldRenderer::WorldRenderer(World *world, std::vector<TileEntity *> *tileEntiti
 	dsiBuildSourceAvailabilityValid = false;
 	dsiBuildPass = 0;
 	dsiBuildCursor = 0;
+	dsiBuildGreedyFace = 0;
+	dsiBuildGreedySlice = 0;
 	dsiBuildHasPass1 = false;
 	dsiBuildChunkLit = false;
 	dsiBuildDirtyDuringBuild = false;

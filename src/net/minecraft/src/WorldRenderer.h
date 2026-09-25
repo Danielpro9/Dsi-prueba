@@ -383,6 +383,15 @@ private:
 	bool dsiBuildSourceAvailabilityValid;
 	int_t dsiBuildPass;
 	int_t dsiBuildCursor;
+	// Which greedy face direction the opaque pass will sweep next, 0..6.
+	// DSI_GREEDY_FACE_COUNT means the greedy stage of this build is finished
+	// and the per-block loop owns the remaining budget. Mirrors PS2's
+	// ps2BuildGreedyFace/ps2BuildGreedySlice above -- see DsiGreedyMesh.h for
+	// why DSi's version has no section-cache/raw-layout counterpart to those.
+	int_t dsiBuildGreedyFace;
+	// First unprocessed plane (0..15) inside dsiBuildGreedyFace. Greedy merging
+	// never crosses face planes, so this can time-slice a direction exactly.
+	int_t dsiBuildGreedySlice;
 	bool dsiBuildHasPass1;
 	bool dsiBuildChunkLit;
 	bool dsiBuildDirtyDuringBuild;

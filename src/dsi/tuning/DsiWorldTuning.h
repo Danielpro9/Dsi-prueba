@@ -171,4 +171,31 @@
 #undef  PLATFORM_DSI_LIGHTMAP_ENABLED
 #define PLATFORM_DSI_LIGHTMAP_ENABLED              0
 
+// Greedy meshing (src/dsi/render/DsiGreedyMesh.cpp): PLATFORM_ENABLE_GREEDY_MESH
+// is already 1 here via PlatformGameTuning.h's PLATFORM_PS2||PLATFORM_DSI branch
+// (PS2_ENABLE_GREEDY_MESH) -- these two are DSi's own counterparts to PS2's
+// PS2_GREEDY_MAX_MERGE/PS2_GREEDY_SLICES_PER_STEP (Ps2MeshTuning.h), not aliased
+// through the generic PLATFORM_ table because nothing else reads them.
+//
+// DSI_GREEDY_MAX_MERGE matches PS2's own value (2, not the algorithm's 16-wide
+// ceiling): DsiGreedyMesh.cpp's merged-quad UV span does not scale with
+// width/height (see its header comment -- DS has no hardware region-repeat to
+// tile a scaled span against), so a merged quad's single source tile is
+// stretched across the merged area instead of tiled. Capping merges at 2x2
+// bounds that stretch to something unnoticeable rather than letting a long
+// flat run (a 16-wide floor, say) stretch one 16px tile across 16 blocks.
+#undef  DSI_GREEDY_MAX_MERGE
+#define DSI_GREEDY_MAX_MERGE                     2
+
+// DSI_GREEDY_SLICES_PER_STEP: how many of a face direction's up-to-16 planes
+// the greedy sub-phase scans in one dsiBuildRendererStep() call before
+// returning to let the rest of the frame run. Half of PS2's 4 -- DSi's ARM9 has
+// no hardware FPU at all (PS2's EE does), the same reasoning DsiWorldTuning.h's
+// own banner gives for every other budget in this file being tighter than
+// PS2's, and this is unmeasured on real hardware yet (see that banner): a
+// smaller slice keeps the worst case per-step cost bounded while there is
+// still no frame-time measurement to size it against directly.
+#undef  DSI_GREEDY_SLICES_PER_STEP
+#define DSI_GREEDY_SLICES_PER_STEP               2
+
 #endif // PLATFORM_DSI
