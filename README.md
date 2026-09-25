@@ -1,6 +1,6 @@
 # OptiCraft Heritage (WIP DSi PORT!!!)
 
-En alguna de las branchs de esta repo (ni idea de cual no me acuerdo) se esta vibecodeando un port de OptiCraft Heritage a la Nintendo DSi, de momento el renderizado esta completamente roto y pos, todo lo demas tambien XDDXD
+En alguna de las branchs de esta repo (ni idea de cual no me acuerdo) se esta vibecodeando un port de OptiCraft Heritage a la Nintendo DSi (Super experimental)
 btw que yo sepa esta wea usa blocksds pero ni idea de como compilarlo como tal
 
 # README ORIGINAL:
