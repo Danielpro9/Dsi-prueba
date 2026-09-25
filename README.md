@@ -2,7 +2,7 @@
 
 En alguna de las branchs de esta repo (ni idea de cual no me acuerdo) se esta vibecodeando un port de OptiCraft Heritage a la Nintendo DSi (Super experimental)
 
-btw está todo el Port ya está implementado y funcional (debería) teniendo algunos bugs visuales, lo único que falta es mejorar el rendimiento (5-12 FPS) 
+btw está todo el Port ya está implementado y funcional (debería) teniendo algunos bugs visuales, lo único que falta es mejorar bastante el rendimiento (4-12 FPS) 
 
 Este port usa blocksds pero ni idea de como compilarlo como tal
 
