@@ -5,6 +5,7 @@
 #include "platform/PlatformConfig.h"
 #include "platform/TextureResidencyPolicy.h"
 #include "legacy/LegacyPanoramaUpload.h"
+#include "legacy/LegacyUiPolicy.h"
 #include "java/Arithmetic.h"
 
 #include <algorithm>
@@ -93,11 +94,26 @@ static bool isTileAtlasResource(const std::string &name)
 // Both are 128x128 with only 1-2 real colours, so the RGBA path's extra
 // bytes-per-pixel cost here is negligible next to font.png being resident
 // for the entire run regardless.
+//
+// legacyUiTitleResourcePath() ("/legacy/title.png") added after a
+// screenshot showed the same solid black box behind the OptiCraft logo in
+// the legacy main menu -- LegacyPanoramaUpload.cpp already resizes this
+// (and logo1.png/logo2.png below) to a valid power-of-two square before it
+// ever reaches here, for an unrelated reason (the source photo/logo is not
+// natively power-of-two), so it was already hitting this same paletted
+// path afterwards. logo1.png/logo2.png (the boot-time splash images) are
+// the identical case -- not yet reported broken, but nothing about them is
+// different, so fixing one without the other would just be waiting for the
+// next screenshot. All three are menu/boot-only: never resident at the
+// same time as gameplay's own textures, so the extra RGBA bytes cost
+// nothing that would otherwise go to terrain/items/mob skins.
 static bool dsiNeedsRealAlphaTransparency(const std::string &name)
 {
 	const std::string path = normalizedTexturePath(name);
 	return path == "/gui/icons.png" || path == "/item/xporb.png" ||
-		path == "/font/default.png" || path == "/font/alternate.png";
+		path == "/font/default.png" || path == "/font/alternate.png" ||
+		path == legacyUiTitleResourcePath() ||
+		path == "/legacy/logo1.png" || path == "/legacy/logo2.png";
 }
 #endif
 
@@ -551,6 +567,46 @@ bool RenderEngine::loadTextureStreamInto(const std::string &s, int_t texture, st
 		else if (image && normalizedPath == "/gui/items.png")
 			Config::setIconWidthItems(image->getWidth() / 16);
 #if PLATFORM_DSI
+		// One-shot diagnostic for the "hearts/food show only their empty
+		// background, never the filled/coloured overlay" report: the user's
+		// own hypothesis (the background/container heart renders, the red
+		// fill never does) matches GuiIngame.cpp's renderPlayerStatusHudGeometry()
+		// exactly -- it draws a background rect at icons.png (16,0) THEN a
+		// foreground rect at (52,0)/(61,0) (full/half heart) on top, same
+		// texture, same draw call shape, only the UV differs. Both regions
+		// are now reached via the same real-alpha RGBA path (this function's
+		// dsiNeedsRealAlphaTransparency() list) as of this session, so if the
+		// foreground pixels are silently near-transparent or blank in the
+		// DECODED source image itself, that would explain the symptom
+		// without needing any render-state bug -- logs the actual decoded
+		// RGBA bytes at both UV spots (hearts row y=0, food row y=27) so the
+		// next real-hardware log answers "bad source pixels" vs. "something
+		// wrong in how they are drawn" with numbers instead of a guess.
+		if (image && normalizedPath == "/gui/icons.png")
+		{
+			static bool s_dsiLoggedIconsPixels = false;
+			if (!s_dsiLoggedIconsPixels)
+			{
+				s_dsiLoggedIconsPixels = true;
+				const unsigned char *px = image->getRawPixels();
+				const int_t iw = image->getWidth();
+				const int_t ih = image->getHeight();
+				auto sample = [&](int_t x, int_t y) -> std::string
+				{
+					if (x < 0 || y < 0 || x >= iw || y >= ih)
+						return "out-of-bounds";
+					const std::size_t idx = (static_cast<std::size_t>(y) * static_cast<std::size_t>(iw) + static_cast<std::size_t>(x)) * 4u;
+					char buf[32];
+					std::snprintf(buf, sizeof(buf), "%u,%u,%u,%u", px[idx], px[idx + 1], px[idx + 2], px[idx + 3]);
+					return std::string(buf);
+				};
+				MC_LOG_WARN("dsi", "icons.png %dx%d pixel samples (r,g,b,a):\n", (int)iw, (int)ih);
+				MC_LOG_WARN("dsi", "  heart bg(16,0)=%s full(52,0)=%s half(61,0)=%s\n",
+					sample(16, 0).c_str(), sample(52, 0).c_str(), sample(61, 0).c_str());
+				MC_LOG_WARN("dsi", "  food bg(16,27)=%s full(52,27)=%s half(61,27)=%s\n",
+					sample(16, 27).c_str(), sample(52, 27).c_str(), sample(61, 27).c_str());
+			}
+		}
 		// DSi only: terrain.png/gui/items.png are large multi-material atlases
 		// that blow past the paletted GL_RGB256 format's 256-colour ceiling and
 		// were getting crushed down to ~60 shared colours for the whole atlas --
