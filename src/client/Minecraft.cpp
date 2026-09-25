@@ -1941,12 +1941,17 @@ void Minecraft::runTick()
                 // getting worse the longer a session ran are consistent with
                 // that budget getting tighter over time, not just with
                 // exploring more chunks.
-                MC_LOG_INFO("dsi", "memtrend heap=%u/%uKB vram=%u/512KB chunks=%d entities=%u tileEntities=%u\n",
+                // rebuilds= is dsiGetTotalRendererRebuilds(): if this keeps
+                // climbing while chunks/entities/tileEntities all stay flat, the
+                // same already-loaded section(s) are being rebuilt over and over
+                // instead of replayed cheaply -- see that function's own comment.
+                MC_LOG_INFO("dsi", "memtrend heap=%u/%uKB vram=%u/512KB chunks=%d entities=%u tileEntities=%u rebuilds=%u\n",
                     (unsigned)(dsiGetHeapCommitted() / 1024u), (unsigned)(dsiGetHeapCeiling() / 1024u),
                     (unsigned)(dsiTotalTextureVramBytes() / 1024u),
                     (int)theWorld->getLoadedChunkCount(),
                     (unsigned)theWorld->loadedEntityList.size(),
-                    (unsigned)theWorld->loadedTileEntityList.size());
+                    (unsigned)theWorld->loadedTileEntityList.size(),
+                    dsiGetTotalRendererRebuilds());
             }
 #endif
         }

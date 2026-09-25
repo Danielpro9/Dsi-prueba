@@ -63,4 +63,15 @@ std::size_t dsiTotalTextureVramBytes();
 // is measured against.
 std::size_t dsiTextureVramBytes(int name);
 
+// Cumulative count of every WorldRenderer::dsiBuildRendererStep() call across
+// the whole process that finished a section's build and published it (the
+// chunksUpdated++ right before dsiResetBuildState() at the end of that
+// function -- see WorldRendererDsi.cpp). One real completed rebuild, not one
+// incremental step. Surfaced on Minecraft.cpp's memtrend line so a report of
+// "performance is bad even standing still, nothing streaming in" can show
+// whether this keeps climbing while getLoadedChunkCount() stays flat --
+// which would mean the same already-loaded chunk(s) are being rebuilt over
+// and over rather than replayed cheaply, instead of guessing at the cause.
+unsigned int dsiGetTotalRendererRebuilds();
+
 #endif // DSI_PLATFORM

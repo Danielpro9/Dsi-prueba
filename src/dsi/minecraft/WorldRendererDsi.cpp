@@ -91,6 +91,8 @@
 #include "net/minecraft/src/Config.h"
 #include "platform/RenderTerrainAPI.h"
 #include "dsi/minecraft/DsiCapturedMeshRepack.h"
+#include "dsi/render/DsiWaterMerge.h"
+#include "dsi/DsiEarlyInit.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -109,6 +111,14 @@ namespace
 	// targets, and a missing chunk here does not block drawing (the section
 	// simply stays on its previous mesh and retries next step).
 	constexpr int_t kDsiRendererDependencyRequestsPerStep = 1;
+
+	// See dsiGetTotalRendererRebuilds()'s own comment (DsiEarlyInit.h).
+	unsigned int g_dsiTotalRendererRebuilds = 0u;
+}
+
+unsigned int dsiGetTotalRendererRebuilds()
+{
+	return g_dsiTotalRendererRebuilds;
 }
 
 void WorldRenderer::updateRenderer()
@@ -377,6 +387,26 @@ bool WorldRenderer::dsiBuildRendererStep(int_t blockBudget)
 		stepMesh.clear();
 		if (tessellator->capture(stepMesh))
 		{
+#if PLATFORM_ENABLE_GREEDY_MESH
+			// Still-water top-face merge, scoped to this step's own quads only
+			// (not the whole accumulated dsiBuildRawBuffer) -- same bounded-
+			// per-step cost shape as the greedy pass above, and mirrors
+			// WorldRendererPs2.cpp's own hook point for the fork's water merge
+			// this was ported from (right after capture, before the quads are
+			// appended to the persistent build buffer). See DsiWaterMerge.h's
+			// header comment for the full design (must run before
+			// dsiRepackCapturedMeshFast() converts this data to fixed-point).
+			if (dsiBuildPass == 1 && Block::waterStill != nullptr &&
+				stepMesh.primitive == RenderPrimitive::Quads &&
+				stepMesh.hasTexture && stepMesh.hasColor && stepMesh.hasBrightness)
+			{
+				const int_t waterTile = Block::waterStill->getBlockTextureFromSideAndMetadata(1, 0);
+				const unsigned mergedQuads = dsi_merge_water_top_pairs(stepMesh.raw, waterTile,
+					chunkcache, x0, y0, z0);
+				if (mergedQuads != 0)
+					stepMesh.vertexCount -= (int_t)(mergedQuads * 4u);
+			}
+#endif
 			dsiBuildRawBuffer[dsiBuildPass].insert(dsiBuildRawBuffer[dsiBuildPass].end(),
 				stepMesh.raw.begin(), stepMesh.raw.end());
 			dsiBuildVertexCount[dsiBuildPass] += stepMesh.vertexCount;
@@ -477,6 +507,7 @@ bool WorldRenderer::dsiBuildRendererStep(int_t blockBudget)
 	isInitialized = true;
 	needsUpdate = dirtyDuringBuild;
 	chunksUpdated++;
+	++g_dsiTotalRendererRebuilds;
 	dsiResetBuildState();
 	return true;
 }
