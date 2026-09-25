@@ -601,10 +601,21 @@ bool RenderEngine::loadTextureStreamInto(const std::string &s, int_t texture, st
 					return std::string(buf);
 				};
 				MC_LOG_WARN("dsi", "icons.png %dx%d pixel samples (r,g,b,a):\n", (int)iw, (int)ih);
-				MC_LOG_WARN("dsi", "  heart bg(16,0)=%s full(52,0)=%s half(61,0)=%s\n",
-					sample(16, 0).c_str(), sample(52, 0).c_str(), sample(61, 0).c_str());
-				MC_LOG_WARN("dsi", "  food bg(16,27)=%s full(52,27)=%s half(61,27)=%s\n",
-					sample(16, 27).c_str(), sample(52, 27).c_str(), sample(61, 27).c_str());
+				// First round (16,0)/(52,0)/(61,0)/(16,27)/(52,27)/(61,27) -- the
+				// exact coordinates GuiIngame.cpp's own draw calls use -- all came
+				// back 0,0,0,0, which cannot be right if the crosshair (confirmed
+				// visibly correct, drawn from this same texture's (0,0)-(16,16))
+				// is proof this image has real content somewhere. Widening the
+				// net: sample the known-good crosshair corner for a sanity check,
+				// then a spread across the two rows GuiIngame.cpp reads from, to
+				// find out WHERE this asset's real heart/food art actually is
+				// instead of assuming it matches vanilla's layout.
+				MC_LOG_WARN("dsi", "  crosshair(0,0)=%s (8,8)=%s\n",
+					sample(0, 0).c_str(), sample(8, 8).c_str());
+				for (int_t x = 0; x < 128; x += 8)
+					MC_LOG_WARN("dsi", "  y0 x=%d: %s\n", (int)x, sample(x, 0).c_str());
+				for (int_t x = 0; x < 128; x += 8)
+					MC_LOG_WARN("dsi", "  y27 x=%d: %s\n", (int)x, sample(x, 27).c_str());
 			}
 		}
 		// DSi only: terrain.png/gui/items.png are large multi-material atlases
