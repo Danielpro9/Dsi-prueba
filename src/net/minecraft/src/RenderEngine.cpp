@@ -591,31 +591,58 @@ bool RenderEngine::loadTextureStreamInto(const std::string &s, int_t texture, st
 				const unsigned char *px = image->getRawPixels();
 				const int_t iw = image->getWidth();
 				const int_t ih = image->getHeight();
-				auto sample = [&](int_t x, int_t y) -> std::string
+				// Round 1 (exact icon corners) and round 2 (a coarse 8px-stride
+				// scan) both came back mostly 0,0,0,0 -- but round 2 also found
+				// real opaque pixels nearby (e.g. y0 x=40/x=48), and the exact
+				// corner of the BACKGROUND heart (16,0) reads 0,0,0,0 too even
+				// though the background is confirmed to render correctly on
+				// screen. A single corner sample cannot tell "blank" from "this
+				// glyph just has a transparent corner" -- heart/food icons are
+				// small notched shapes, not filled squares. Round 3: scan every
+				// pixel of each 9x9 rect GuiIngame.cpp actually reads (not just
+				// its top-left corner) and report how many of the 81 pixels are
+				// non-transparent, so "the source art is missing" vs. "the
+				// source art is fine" is answered with a real count instead of
+				// one potentially-unlucky corner pixel.
+				auto scanRect = [&](const char *label, int_t rx, int_t ry)
 				{
-					if (x < 0 || y < 0 || x >= iw || y >= ih)
-						return "out-of-bounds";
-					const std::size_t idx = (static_cast<std::size_t>(y) * static_cast<std::size_t>(iw) + static_cast<std::size_t>(x)) * 4u;
-					char buf[32];
-					std::snprintf(buf, sizeof(buf), "%u,%u,%u,%u", px[idx], px[idx + 1], px[idx + 2], px[idx + 3]);
-					return std::string(buf);
+					int_t opaqueCount = 0;
+					int_t exX = -1, exY = -1;
+					unsigned char exR = 0, exG = 0, exB = 0, exA = 0;
+					for (int_t dy = 0; dy < 9; ++dy)
+					{
+						for (int_t dx = 0; dx < 9; ++dx)
+						{
+							const int_t x = rx + dx;
+							const int_t y = ry + dy;
+							if (x < 0 || y < 0 || x >= iw || y >= ih)
+								continue;
+							const std::size_t idx = (static_cast<std::size_t>(y) * static_cast<std::size_t>(iw) + static_cast<std::size_t>(x)) * 4u;
+							if (px[idx + 3] != 0)
+							{
+								++opaqueCount;
+								if (exX < 0)
+								{
+									exX = x; exY = y;
+									exR = px[idx]; exG = px[idx + 1]; exB = px[idx + 2]; exA = px[idx + 3];
+								}
+							}
+						}
+					}
+					if (opaqueCount > 0)
+						MC_LOG_WARN("dsi", "  %s rect(%d,%d,9x9): %d/81 opaque, e.g. (%d,%d)=%u,%u,%u,%u\n",
+							label, (int)rx, (int)ry, (int)opaqueCount, (int)exX, (int)exY, exR, exG, exB, exA);
+					else
+						MC_LOG_WARN("dsi", "  %s rect(%d,%d,9x9): 0/81 opaque (fully transparent)\n",
+							label, (int)rx, (int)ry);
 				};
-				MC_LOG_WARN("dsi", "icons.png %dx%d pixel samples (r,g,b,a):\n", (int)iw, (int)ih);
-				// First round (16,0)/(52,0)/(61,0)/(16,27)/(52,27)/(61,27) -- the
-				// exact coordinates GuiIngame.cpp's own draw calls use -- all came
-				// back 0,0,0,0, which cannot be right if the crosshair (confirmed
-				// visibly correct, drawn from this same texture's (0,0)-(16,16))
-				// is proof this image has real content somewhere. Widening the
-				// net: sample the known-good crosshair corner for a sanity check,
-				// then a spread across the two rows GuiIngame.cpp reads from, to
-				// find out WHERE this asset's real heart/food art actually is
-				// instead of assuming it matches vanilla's layout.
-				MC_LOG_WARN("dsi", "  crosshair(0,0)=%s (8,8)=%s\n",
-					sample(0, 0).c_str(), sample(8, 8).c_str());
-				for (int_t x = 0; x < 128; x += 8)
-					MC_LOG_WARN("dsi", "  y0 x=%d: %s\n", (int)x, sample(x, 0).c_str());
-				for (int_t x = 0; x < 128; x += 8)
-					MC_LOG_WARN("dsi", "  y27 x=%d: %s\n", (int)x, sample(x, 27).c_str());
+				MC_LOG_WARN("dsi", "icons.png %dx%d per-rect opacity scan:\n", (int)iw, (int)ih);
+				scanRect("heart-bg", 16, 0);
+				scanRect("heart-full", 52, 0);
+				scanRect("heart-half", 61, 0);
+				scanRect("food-bg", 16, 27);
+				scanRect("food-full", 52, 27);
+				scanRect("food-half", 61, 27);
 			}
 		}
 		// DSi only: terrain.png/gui/items.png are large multi-material atlases
