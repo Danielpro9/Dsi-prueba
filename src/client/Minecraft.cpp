@@ -1952,6 +1952,36 @@ void Minecraft::runTick()
                     (unsigned)theWorld->loadedEntityList.size(),
                     (unsigned)theWorld->loadedTileEntityList.size(),
                     dsiGetTotalRendererRebuilds());
+
+                // ClientPlatformPolicy_DSI.cpp's releaseWorldExitAssets() already
+                // proved /mob/*.png (~40 distinct skins vanilla can load across a
+                // session -- zombie, cow, pig, skeleton, creeper, wolf,
+                // villager/*, char.png, ...) never got released during a session
+                // at all, only when leaving the world entirely: the 512KB texture
+                // budget only ever grew as new mob types were met, right up
+                // against the real-hardware "VRAM pinned at 501/512KB" stall that
+                // fix's own comment records. Extend the same, already-proven
+                // lazy-reload-on-next-need release to mid-session too: on this
+                // same ~1s cadence, release every resident /mob/*.png the moment
+                // no living entity other than the player is currently loaded --
+                // DSi's tiny render distance (radius 1) means that is the common
+                // case between encounters, not the exception. isMob() alone is
+                // too narrow here (only EntityMob -- hostile mobs -- override it;
+                // EntityAnimal/EntityWaterMob/etc. do not), so this checks
+                // EntityLiving directly and excludes only the player themself.
+                bool dsiHasNonPlayerLiving = false;
+                for (Entity *entity : theWorld->loadedEntityList)
+                {
+                    if (entity == nullptr || entity == thePlayer)
+                        continue;
+                    if (dynamic_cast<EntityLiving *>(entity) != nullptr)
+                    {
+                        dsiHasNonPlayerLiving = true;
+                        break;
+                    }
+                }
+                if (!dsiHasNonPlayerLiving)
+                    renderEngine->releaseTexturesWithPrefix("/mob/");
             }
 #endif
         }
