@@ -1038,13 +1038,29 @@ bool drawInterleavedMesh(const RenderInterleavedMesh& mesh)
 		std::uint8_t lightmapR = 255, lightmapG = 255, lightmapB = 255;
 		if (mesh.hasBrightness)
 		{
-			// Brightness carries the lightmap (u, v) pair as two floats, the
-			// same convention EntityRenderer/Tessellator use when there is no
-			// real second texture unit to send it to -- see the lightmap
-			// comment block above.
-			float uv[2];
-			std::memcpy(uv, vertex + mesh.brightnessOffset, sizeof(uv));
-			haveLightmapColor = lightmapColorAt(uv[0], uv[1], lightmapR, lightmapG, lightmapB);
+			// FIXED (was reading 8 bytes -- a float[2] u,v pair -- from a
+			// field Tessellator only ever writes 4 bytes into): Tessellator::
+			// setBrightness(int) stores World::getLightBrightnessForSkyBlocks()'s
+			// packed int, (skyLight << 20) | (blockLight << 4) (see that
+			// function; confirmed by Tessellator.cpp's own raw-buffer write,
+			// rawBuffer[rawBufferIndex + 7] = brightness -- a single word, not
+			// two), the exact same packed value vanilla OpenGL's lightmap path
+			// sends via glMultiTexCoord2f(brightness & 0xffff, brightness >>
+			// 16) with a texture-matrix scale of 1/256. The 8-byte read here
+			// used to run 4 bytes past this field on every vertex (into the
+			// next vertex's position, or -- for a mesh's last vertex -- past
+			// the end of the whole captured buffer, undefined behaviour) and
+			// fed lightmapColorAt() garbage u/v. Harmless in effect only
+			// because PLATFORM_DSI_LIGHTMAP_ENABLED is 0 (DsiWorldTuning.h --
+			// measured slower than lighting off, stays off on purpose), so
+			// g_lightmapColors is always empty and lightmapColorAt() returns
+			// false before ever using u/v -- fixed for correctness/robustness
+			// regardless, not because anything currently reads the result.
+			std::int32_t packedBrightness = 0;
+			std::memcpy(&packedBrightness, vertex + mesh.brightnessOffset, sizeof(packedBrightness));
+			const float lightU = static_cast<float>(packedBrightness & 0xffff) / 256.0f;
+			const float lightV = static_cast<float>((packedBrightness >> 16) & 0xffff) / 256.0f;
+			haveLightmapColor = lightmapColorAt(lightU, lightV, lightmapR, lightmapG, lightmapB);
 		}
 		if (mesh.hasColor)
 		{
@@ -1357,9 +1373,17 @@ bool drawCapturedMeshFast(const RenderCapturedMesh& mesh)
 		std::uint8_t lightmapR = 255, lightmapG = 255, lightmapB = 255;
 		if (mesh.hasBrightness)
 		{
-			float uv[2];
-			std::memcpy(uv, vertex + mesh.brightnessOffset, sizeof(uv));
-			haveLightmapColor = lightmapColorAt(uv[0], uv[1], lightmapR, lightmapG, lightmapB);
+			// See drawInterleavedMesh()'s identical block above for the full
+			// explanation: this field is Tessellator's single packed
+			// (skyLight << 20) | (blockLight << 4) int, not a float[2] u,v
+			// pair -- reading 8 bytes here used to run past this field (into
+			// the next vertex, or past the buffer's end for a mesh's last
+			// vertex).
+			std::int32_t packedBrightness = 0;
+			std::memcpy(&packedBrightness, vertex + mesh.brightnessOffset, sizeof(packedBrightness));
+			const float lightU = static_cast<float>(packedBrightness & 0xffff) / 256.0f;
+			const float lightV = static_cast<float>((packedBrightness >> 16) & 0xffff) / 256.0f;
+			haveLightmapColor = lightmapColorAt(lightU, lightV, lightmapR, lightmapG, lightmapB);
 		}
 		if (mesh.hasColor)
 		{
