@@ -198,4 +198,30 @@
 #undef  DSI_GREEDY_SLICES_PER_STEP
 #define DSI_GREEDY_SLICES_PER_STEP               2
 
+// DSI_GREEDY_BATCHES_PER_CALL: how many DSI_GREEDY_SLICES_PER_STEP-sized
+// batches WorldRendererDsi.cpp's dsiBuildRendererStep() runs back-to-back in
+// ONE call before yielding, instead of exactly one. Real-hardware evidence
+// (see that call site's own comment): at 1 batch/call, a section's whole
+// 6-face greedy phase needed 48 separate calls -- 48 frames -- to finish,
+// and PLATFORM_CHUNK_BUILD_STEP_US (the elapsed-time budget that would
+// otherwise cap a call's cost) is 0 for DSi, inherited from PS2 unmodified,
+// so nothing was actually bounding how long that window could stretch. A
+// world never sits still that long without SOMETHING marking a section
+// dirty (fluid flow, a scheduled tick), and dsiResetBuildState() discards a
+// build's entire progress -- greedy phase included -- on any such interrupt,
+// so sections were restarting before they ever finished: confirmed via
+// memtrend's rebuilds= counter climbing tens of times a second while
+// chunks/entities/heap stayed completely flat.
+//
+// 6 batches/call cuts the frames-to-finish by the same factor (48 -> 8),
+// without jumping straight to "the whole phase in one call", which risks
+// reproducing the single-frame spike slicing was introduced to avoid in the
+// first place (see Ps2GreedyMesh.h's own account of that exact problem on
+// PS2 -- whose EE has no FPU gap to DSi's ARM9 at all, this platform's
+// weakest link). Unmeasured against real per-step timing, same as
+// DSI_GREEDY_SLICES_PER_STEP itself; revisit both together once a real
+// build-time profile exists.
+#undef  DSI_GREEDY_BATCHES_PER_CALL
+#define DSI_GREEDY_BATCHES_PER_CALL              6
+
 #endif // PLATFORM_DSI

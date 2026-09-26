@@ -293,39 +293,81 @@ bool WorldRenderer::dsiBuildRendererStep(int_t blockBudget)
 		const bool dsiAllowGreedyMesh = !Config::isConnectedTextures() && !Config::isNaturalTextures();
 		if (dsiAllowGreedyMesh && dsiBuildPass == 0 && dsiBuildGreedyFace < RENDER_TERRAIN_GREEDY_FACE_COUNT)
 		{
-			const int_t slicesPerStep = DSI_GREEDY_SLICES_PER_STEP < 1 ? 1 :
-				(DSI_GREEDY_SLICES_PER_STEP > 16 ? 16 : DSI_GREEDY_SLICES_PER_STEP);
-			const int_t sliceBegin = dsiBuildGreedySlice;
-			int_t sliceEnd = sliceBegin + slicesPerStep;
-			if (sliceEnd > 16)
-				sliceEnd = 16;
+			// Real-hardware evidence (memtrend's rebuilds= counter climbing
+			// tens of times a second while chunks/entities/heap stayed
+			// completely flat): a fixed one-slice-batch-per-call budget meant
+			// the whole 6-face greedy phase needed dozens of separate
+			// dsiBuildRendererStep() calls -- dozens of FRAMES -- to finish
+			// for one section. dsiResetBuildState() discards a build's entire
+			// progress, greedy phase included, the moment anything marks the
+			// section dirty during that window (fluid flow, a scheduled
+			// tick, anything -- completely ordinary, ever-present world
+			// activity). Stretching the greedy phase across that many frames
+			// made hitting that window on every single attempt close to
+			// certain, so sections never finished: an interrupted restart
+			// discards even the greedy geometry already computed and starts
+			// the whole phase over, forever.
+			//
+			// Fix: process several slice-batches back-to-back within THIS
+			// call instead of unconditionally yielding after exactly one.
+			// PLATFORM_CHUNK_BUILD_STEP_US (the elapsed-time budget the
+			// per-block loop below checks) is 0 or DSi -- inherited from PS2
+			// unmodified, confirmed by grep, meaning that check is already a
+			// permanent no-op here and was never actually bounding per-call
+			// cost on this platform to begin with -- so this uses a fixed
+			// batch-count bound instead of leaning on a mechanism that would
+			// not fire. DSI_GREEDY_BATCHES_PER_CALL batches (each
+			// DSI_GREEDY_SLICES_PER_STEP slices) run per call, cutting the
+			// number of frames a section's greedy phase needs to finish by
+			// the same factor -- shrinking the dirty-during-build interrupt
+			// window that was causing the restart loop -- without going all
+			// the way to "the whole 6-face phase in one call", which risks
+			// reintroducing the single-frame spike slicing existed to avoid
+			// in the first place (see Ps2GreedyMesh.h's own history of that
+			// exact problem on PS2, whose CPU has no FPU gap to DSi's at
+			// all). Picking the right multiplier without a real per-step
+			// timing measurement is still a judgement call; this errs
+			// conservative over "finish instantly, risk a new stutter".
+			int_t dsiGreedyBatchesThisCall = 0;
+			const int_t dsiGreedyBatchLimit = DSI_GREEDY_BATCHES_PER_CALL < 1 ? 1 : DSI_GREEDY_BATCHES_PER_CALL;
+			while (dsiBuildGreedyFace < RENDER_TERRAIN_GREEDY_FACE_COUNT &&
+				dsiGreedyBatchesThisCall < dsiGreedyBatchLimit)
+			{
+				++dsiGreedyBatchesThisCall;
+				const int_t slicesPerStep = DSI_GREEDY_SLICES_PER_STEP < 1 ? 1 :
+					(DSI_GREEDY_SLICES_PER_STEP > 16 ? 16 : DSI_GREEDY_SLICES_PER_STEP);
+				const int_t sliceBegin = dsiBuildGreedySlice;
+				int_t sliceEnd = sliceBegin + slicesPerStep;
+				if (sliceEnd > 16)
+					sliceEnd = 16;
 
-			int_t greedyX0 = x0, greedyY0 = y0, greedyZ0 = z0;
-			int_t greedyX1 = x1, greedyY1 = y1, greedyZ1 = z1;
-			if (dsiBuildGreedyFace <= 1)
-			{
-				greedyY0 = y0 + sliceBegin;
-				greedyY1 = y0 + sliceEnd;
-			}
-			else if (dsiBuildGreedyFace <= 3)
-			{
-				greedyZ0 = z0 + sliceBegin;
-				greedyZ1 = z0 + sliceEnd;
-			}
-			else
-			{
-				greedyX0 = x0 + sliceBegin;
-				greedyX1 = x0 + sliceEnd;
-			}
+				int_t greedyX0 = x0, greedyY0 = y0, greedyZ0 = z0;
+				int_t greedyX1 = x1, greedyY1 = y1, greedyZ1 = z1;
+				if (dsiBuildGreedyFace <= 1)
+				{
+					greedyY0 = y0 + sliceBegin;
+					greedyY1 = y0 + sliceEnd;
+				}
+				else if (dsiBuildGreedyFace <= 3)
+				{
+					greedyZ0 = z0 + sliceBegin;
+					greedyZ1 = z0 + sliceEnd;
+				}
+				else
+				{
+					greedyX0 = x0 + sliceBegin;
+					greedyX1 = x0 + sliceEnd;
+				}
 
-			stepDrew |= renderTerrainGreedyMeshFace(chunkcache, (int)dsiBuildGreedyFace,
-				(int)greedyX0, (int)greedyY0, (int)greedyZ0, (int)greedyX1, (int)greedyY1, (int)greedyZ1);
+				stepDrew |= renderTerrainGreedyMeshFace(chunkcache, (int)dsiBuildGreedyFace,
+					(int)greedyX0, (int)greedyY0, (int)greedyZ0, (int)greedyX1, (int)greedyY1, (int)greedyZ1);
 
-			dsiBuildGreedySlice = sliceEnd;
-			if (dsiBuildGreedySlice >= 16)
-			{
-				dsiBuildGreedySlice = 0;
-				dsiBuildGreedyFace++;
+				dsiBuildGreedySlice = sliceEnd;
+				if (dsiBuildGreedySlice >= 16)
+				{
+					dsiBuildGreedySlice = 0;
+					dsiBuildGreedyFace++;
+				}
 			}
 		}
 		else
