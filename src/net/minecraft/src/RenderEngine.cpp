@@ -1690,13 +1690,61 @@ void RenderEngine::uploadTextureFxTile(TextureFX *texturefx, int_t texture, int_
 		return;
 
 	tileWidth = Config::limit(tileWidth, 1, Config::getMaxDynamicTileWidth());
-	std::vector<byte_t> scaled(static_cast<std::size_t>(tileWidth) * static_cast<std::size_t>(tileWidth) * 4u);
+
+	// This runs every tick for every active animated tile (lava/water's
+	// still+flowing TextureFX at minimum), so its per-pixel cost is paid
+	// constantly, not once. y*16/tileWidth and x*16/tileWidth used to be
+	// computed fresh for every one of the tileWidth*tileWidth pixels below --
+	// real integer division, which arm946e-s (DSi's ARM9, no FPU and no
+	// hardware divide either) has no instruction for at all, only a software
+	// routine. tileWidth only changes on a texture-pack switch or resolution
+	// change (Config::setIconWidthTerrain()/setIconWidthItems()), so the
+	// mapping from destination pixel to source pixel is the same every call
+	// until then: cache it in a lookup table instead of recomputing it, and
+	// reuse a scratch buffer instead of a fresh heap allocation (malloc is
+	// not free either) every call.
+	//
+	// Two slots, not one: terrain.png and items.png can have different
+	// Config::getIconWidth{Terrain,Items}() values (DSi in particular
+	// downscales terrain.png but not items.png -- see dsiDownscaleAtlasHalf's
+	// own comment), so a single-slot cache would thrash every call while
+	// both a terrain and an item TextureFX are active in the same tick,
+	// paying the "regenerate" cost every time instead of ever reusing it.
+	struct TileScaleCache
+	{
+		int_t tileWidth = -1;
+		std::vector<int_t> sourceIndexLut;
+		std::vector<byte_t> scaledBuffer;
+	};
+	static TileScaleCache s_tileScaleCache[2];
+	static int_t s_tileScaleCacheNextSlot = 0;
+	TileScaleCache *cache = nullptr;
+	for (TileScaleCache &slot : s_tileScaleCache)
+	{
+		if (slot.tileWidth == tileWidth)
+		{
+			cache = &slot;
+			break;
+		}
+	}
+	if (cache == nullptr)
+	{
+		cache = &s_tileScaleCache[s_tileScaleCacheNextSlot];
+		s_tileScaleCacheNextSlot = (s_tileScaleCacheNextSlot + 1) % 2;
+		cache->tileWidth = tileWidth;
+		cache->sourceIndexLut.resize(static_cast<std::size_t>(tileWidth));
+		for (int_t i = 0; i < tileWidth; ++i)
+			cache->sourceIndexLut[static_cast<std::size_t>(i)] = i * 16 / tileWidth;
+		cache->scaledBuffer.resize(static_cast<std::size_t>(tileWidth) * static_cast<std::size_t>(tileWidth) * 4u);
+	}
+	const std::vector<int_t> &s_sourceIndexLut = cache->sourceIndexLut;
+	std::vector<byte_t> &scaled = cache->scaledBuffer;
 	for (int_t y = 0; y < tileWidth; ++y)
 	{
-		const int_t sourceY = y * 16 / tileWidth;
+		const int_t sourceY = s_sourceIndexLut[static_cast<std::size_t>(y)];
 		for (int_t x = 0; x < tileWidth; ++x)
 		{
-			const int_t sourceX = x * 16 / tileWidth;
+			const int_t sourceX = s_sourceIndexLut[static_cast<std::size_t>(x)];
 			const std::size_t src = (static_cast<std::size_t>(sourceY) * 16u + static_cast<std::size_t>(sourceX)) * 4u;
 			const std::size_t dst = (static_cast<std::size_t>(y) * static_cast<std::size_t>(tileWidth) + static_cast<std::size_t>(x)) * 4u;
 			std::memcpy(&scaled[dst], &texturefx->imageData[src], 4u);
