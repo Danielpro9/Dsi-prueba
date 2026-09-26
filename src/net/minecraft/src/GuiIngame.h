@@ -15,6 +15,9 @@ class Tessellator;
 #ifdef PS2_PLATFORM
 struct Ps2HudCache;
 #endif
+#ifdef DSI_PLATFORM
+struct DsiHudCache;
+#endif
 
 // net.minecraft.src.GuiIngame
 class GuiIngame : public Gui
@@ -45,6 +48,9 @@ private:
 	void ps2RenderHotbarFrame(int_t sw, int_t sh, int_t currentItem);
 	void ps2RenderCrosshair(int_t sw, int_t sh);
 	void ps2RenderPlayerStatusHud(int_t sw, int_t sh);
+#endif
+#ifdef DSI_PLATFORM
+	void dsiRenderPlayerStatusHud(int_t sw, int_t sh);
 #endif
 
 public:
@@ -96,6 +102,9 @@ private:
 #endif
 #ifdef PS2_PLATFORM
 	Ps2HudCache *ps2HudCache;
+#endif
+#ifdef DSI_PLATFORM
+	DsiHudCache *dsiHudCache;
 #endif
 
 public:

@@ -41,7 +41,7 @@
 #include "legacy/LegacyControlTooltipHud.h"
 #include "legacy/LegacyTipHud.h"
 #include "legacy/LegacyHudLayout.h"
-#if PLATFORM_PC_LEGACY || defined(PS2_PLATFORM)
+#if PLATFORM_PC_LEGACY || defined(PS2_PLATFORM) || defined(DSI_PLATFORM)
 #include "pc/render/PcLegacyHudCachePolicy.h"
 #endif
 #if PLATFORM_PC_LEGACY
@@ -78,7 +78,7 @@ namespace
 			static_cast<float_t>(texY) * textureScale);
 	}
 
-#if PLATFORM_PC_LEGACY || defined(PS2_PLATFORM)
+#if PLATFORM_PC_LEGACY || defined(PS2_PLATFORM) || defined(DSI_PLATFORM)
 	PcLegacyHudStatusState makeHudStatusState(Minecraft *mc)
 	{
 		PcLegacyHudStatusState state{};
@@ -187,6 +187,28 @@ struct Ps2HudCache
 	unsigned long long statusSignature = 0;
 };
 #endif
+#ifdef DSI_PLATFORM
+// DSi-only status HUD cache. Unlike Ps2HudCache above, this covers only the
+// status row (hearts/food/armor/air) -- renderPlayerStatusHudGeometry() was
+// re-emitting up to 30-40 independent drawTexturedModalRect() calls every
+// single frame (each its own startDrawingQuads()/draw() cycle: 10 armor +
+// up to 20 heart quads with flash + 10 food + up to 10 air bubbles), on the
+// platform whose own per-draw-call/per-vertex cost is this whole port's
+// established bottleneck. PcLegacyHudStatusState/pcLegacyCanCacheHudStatus/
+// pcLegacyHudStatusSignature (PcLegacyHudCachePolicy.h) are the same
+// platform-agnostic policy PS2/PC_LEGACY already use below -- caching is
+// skipped automatically whenever the geometry itself needs to jitter every
+// frame (low health flash, hunger shake), so this never freezes a HUD that
+// is supposed to be animating.
+struct DsiHudCache
+{
+	RenderStaticMesh status;
+	int_t statusWidth = -1;
+	int_t statusHeight = -1;
+	bool statusValid = false;
+	unsigned long long statusSignature = 0;
+};
+#endif
 
 RenderItem *GuiIngame::itemRenderer = new RenderItem();
 
@@ -213,6 +235,9 @@ GuiIngame::GuiIngame(Minecraft *minecraft)
 #ifdef PS2_PLATFORM
 	, ps2HudCache(new Ps2HudCache())
 #endif
+#ifdef DSI_PLATFORM
+	, dsiHudCache(new DsiHudCache())
+#endif
 	, damageGuiPartialTime(0.0f)
 	, prevVignetteBrightness(1.0f)
 {
@@ -220,6 +245,9 @@ GuiIngame::GuiIngame(Minecraft *minecraft)
 	renderStaticMeshCreate(ps2HudCache->hotbar);
 	renderStaticMeshCreate(ps2HudCache->crosshair);
 	renderStaticMeshCreate(ps2HudCache->status);
+#endif
+#ifdef DSI_PLATFORM
+	renderStaticMeshCreate(dsiHudCache->status);
 #endif
 }
 
@@ -240,6 +268,14 @@ GuiIngame::~GuiIngame()
 		renderStaticMeshDestroy(ps2HudCache->status);
 		delete ps2HudCache;
 		ps2HudCache = nullptr;
+	}
+#endif
+#ifdef DSI_PLATFORM
+	if (dsiHudCache != nullptr)
+	{
+		renderStaticMeshDestroy(dsiHudCache->status);
+		delete dsiHudCache;
+		dsiHudCache = nullptr;
 	}
 #endif
 	clearChatMessages();
@@ -742,6 +778,43 @@ void GuiIngame::ps2RenderPlayerStatusHud(int_t sw, int_t sh)
 	renderPlayerStatusHudUncached(sw, sh);
 }
 #endif
+#ifdef DSI_PLATFORM
+void GuiIngame::dsiRenderPlayerStatusHud(int_t sw, int_t sh)
+{
+	DsiHudCache &cache = *dsiHudCache;
+	const PcLegacyHudStatusState state = makeHudStatusState(mc);
+	if (!pcLegacyCanCacheHudStatus(state))
+	{
+		cache.statusValid = false;
+		renderPlayerStatusHudUncached(sw, sh);
+		return;
+	}
+
+	const unsigned long long signature = static_cast<unsigned long long>(pcLegacyHudStatusSignature(state));
+	const bool needsCompile = !cache.statusValid || cache.statusWidth != sw || cache.statusHeight != sh ||
+		cache.statusSignature != signature;
+	if (needsCompile)
+	{
+		Tessellator &tessellator = Tessellator::instance;
+		zLevel = -90.0f;
+		tessellator.startDrawingQuads();
+		renderPlayerStatusHudGeometry(sw, sh, &tessellator);
+		cache.statusValid = tessellator.finishStaticMesh(cache.status);
+		if (cache.statusValid)
+		{
+			cache.statusWidth = sw;
+			cache.statusHeight = sh;
+			cache.statusSignature = signature;
+		}
+	}
+
+	if (cache.statusValid && renderStaticMeshDraw(cache.status))
+		return;
+
+	cache.statusValid = false;
+	renderPlayerStatusHudUncached(sw, sh);
+}
+#endif
 
 void GuiIngame::renderGameOverlay(float_t partialTick, bool showDebug, int_t mouseX, int_t mouseY)
 {
@@ -806,6 +879,8 @@ void GuiIngame::renderGameOverlay(float_t partialTick, bool showDebug, int_t mou
 		pcLegacyRenderPlayerStatusHud(sw, hudHeight);
 #elif defined(PS2_PLATFORM)
 		ps2RenderPlayerStatusHud(sw, hudHeight);
+#elif defined(DSI_PLATFORM)
+		dsiRenderPlayerStatusHud(sw, hudHeight);
 #else
 		renderPlayerStatusHudUncached(sw, hudHeight);
 #endif
